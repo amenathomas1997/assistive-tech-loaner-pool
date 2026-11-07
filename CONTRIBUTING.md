@@ -6,7 +6,7 @@ process on spreadsheets.
 
 ## Getting it running
 
-You need **PHP 8.0+** (with `pdo_mysql`, `mbstring`, `json` and `openssl`) and
+You need **PHP 8.1+** (with `pdo_mysql`, `mbstring`, `json` and `openssl`) and
 **MySQL 5.7+** or **MariaDB 10.2+**. Nothing else — there is no Composer step
 and no package manager.
 

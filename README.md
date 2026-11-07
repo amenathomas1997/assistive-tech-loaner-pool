@@ -118,7 +118,7 @@ Then open `http://127.0.0.1:8080/`. The router script mirrors what
 `public/.htaccess` does under Apache, so the development server behaves the
 same way as a real host.
 
-Requires **PHP 8.0+** with `pdo_mysql`, `mbstring`, `json` and `openssl`, and
+Requires **PHP 8.1+** with `pdo_mysql`, `mbstring`, `json` and `openssl`, and
 **MySQL 5.7+** or **MariaDB 10.2+**. Those extensions are standard on every
 shared host; the application checks for them on the first request and says
 exactly which one is missing if not.

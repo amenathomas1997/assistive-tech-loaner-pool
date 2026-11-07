@@ -14,7 +14,7 @@ open it in a browser.
 
 | Requirement | Notes |
 |---|---|
-| PHP 8.0 or newer | With `pdo_mysql`, `mbstring`, `json` and `openssl`. All four are standard on shared hosting; the app checks on first request and names any that are missing. |
+| PHP 8.1 or newer | With `pdo_mysql`, `mbstring`, `json` and `openssl`. All four are standard on shared hosting; the app checks on first request and names any that are missing. |
 | Apache with `mod_rewrite` | The default on cPanel. `.htaccess` is already in the right place. |
 | MySQL 5.7+ or MariaDB 10.2+ | An empty database and a user with `ALL PRIVILEGES` on it. |
 | A subdomain or domain | For example `loanerpool.example.com`. |
@@ -326,7 +326,7 @@ organisation to Code 128 under Settings and reprint.
 **502 or "We're sorry, but something went wrong".**
 PHP failed before it could render anything. Check the error log in cPanel →
 **Errors**, or `error_log` in the application directory. The usual causes are a
-PHP version below 8.0 and a missing `pdo_mysql`; both are fixed under **Select
+PHP version below 8.1 and a missing `pdo_mysql`; both are fixed under **Select
 PHP Version**.
 
 ---

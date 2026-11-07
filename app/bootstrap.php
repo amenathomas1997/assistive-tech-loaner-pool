@@ -6,7 +6,7 @@
  * the whole deployment story — a vendor directory that must be installed by a
  * tool the host may not have is exactly the friction this avoids.
  *
- * Requires PHP 8.0+ with pdo_mysql, openssl, mbstring, json and curl.
+ * Requires PHP 8.1+ with pdo_mysql, openssl, mbstring, json and curl.
  */
 
 declare(strict_types=1);
@@ -65,16 +65,25 @@ set_error_handler(static function (int $severity, string $message, string $file,
 });
 
 /**
- * Minimum PHP version. 8.0 brings named arguments, constructor promotion,
- * union types and str_contains, all of which this code uses.
+ * Minimum PHP version.
+ *
+ * 8.1, not 8.0: this codebase uses readonly properties (app/Request.php) and
+ * the `never` return type (app/Response.php), both of which are 8.1 syntax.
+ * On 8.0 they are a parse error, which PHP reports as a blank page — so the
+ * check has to be stricter than "the features I remember using", or the gate
+ * passes and the application dies anyway with nothing on screen to explain it.
+ *
+ * 8.0 reached end of life in November 2023 and no longer receives security
+ * fixes, so this is not a floor worth lowering. Every cPanel host offers 8.1
+ * or newer under "Select PHP Version".
  */
-if (PHP_VERSION_ID < 80000) {
+if (PHP_VERSION_ID < 80100) {
     http_response_code(500);
     header('Content-Type: application/json');
     echo json_encode([
         'error' => [
             'code'    => 'php_too_old',
-            'message' => 'Loaner Pool needs PHP 8.0 or newer. This server is running '
+            'message' => 'Loaner Pool needs PHP 8.1 or newer. This server is running '
                        . PHP_VERSION . '. Change the PHP version for this domain in your '
                        . 'hosting control panel (cPanel: MultiPHP Manager).',
         ],
