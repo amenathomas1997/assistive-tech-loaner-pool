@@ -23,6 +23,7 @@ use Loaner\Request;
 use Loaner\Response;
 use Loaner\Router;
 use Loaner\Settings;
+use Loaner\Updates;
 use Loaner\Util;
 
 final class AdminRoutes
@@ -41,6 +42,9 @@ final class AdminRoutes
         $router->patch('/admin/settings', [self::class, 'updateSettings'], 'settings.write');
         $router->post('/admin/settings/test-email', [self::class, 'testEmail'], 'settings.write');
         $router->get('/admin/settings/email-log', [self::class, 'emailLog'], 'settings.read');
+
+        $router->get('/admin/updates', [self::class, 'updates'], 'settings.read');
+        $router->post('/admin/updates/check', [self::class, 'checkUpdates'], 'settings.write');
 
         $router->get('/admin/api-keys', [self::class, 'apiKeys'], 'apikeys.read');
         $router->post('/admin/api-keys', [self::class, 'createApiKey'], 'apikeys.write');
@@ -397,7 +401,11 @@ final class AdminRoutes
             'summary'     => "Loan period \"{$period['name']}\" deleted",
         ]);
 
-        Response::json(['deleted' => true, 'loan_period' => $period]);
+        Response::json([
+            'deleted'     => true,
+            'loan_period' => $period,
+            'message'     => "Loan period \"{$period['name']}\" removed.",
+        ]);
     }
 
     // -----------------------------------------------------------------------
@@ -479,6 +487,11 @@ final class AdminRoutes
         Response::json([
             'settings' => Settings::forClient($organizationId),
             'changed'  => $result['changed'],
+            // Recomputed after the write, not before: the client re-renders
+            // "is email working?" from this the moment a save returns, and
+            // telling it the pre-save state would show the administrator the
+            // answer to the question they just stopped asking.
+            'mail_status' => self::mailStatus($organizationId),
         ]);
     }
 
@@ -525,7 +538,13 @@ final class AdminRoutes
         Response::json([
             'sent'               => $result['sent'],
             'reason'             => $result['reason'] ?? null,
+            // Echoed back so the confirmation can say which mailbox it came
+            // from and where it went. "A test was sent" is not much use when
+            // the thing being tested is which mailbox is configured.
+            'sender'             => $config['sender'],
+            'recipient'          => $recipient,
             'notifications_live' => $config['enabled'],
+            'mail_status'        => self::mailStatus($organizationId),
             'message'            => $message,
         ], $result['sent'] ? 200 : 502);
     }
@@ -537,6 +556,26 @@ final class AdminRoutes
         Response::json(Util::collection(
             Mailer::recent($organizationId, (int) ($request->queryParam('limit') ?? 50)),
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Updates
+    //
+    // Checking only. Applying an update is command-line work — see
+    // bin/update.php and the note at the top of app/Updates.php.
+    // -----------------------------------------------------------------------
+
+    public static function updates(Request $request): never
+    {
+        Response::json(Updates::check(false));
+    }
+
+    public static function checkUpdates(Request $request): never
+    {
+        // Forced, so the button means what it says. Cached results are what
+        // the page load uses; pressing "check now" and being told a stale
+        // answer would be worse than the wait.
+        Response::json(Updates::check(true));
     }
 
     // -----------------------------------------------------------------------
@@ -634,8 +673,8 @@ final class AdminRoutes
                 'SELECT id, name, key_prefix, scopes, expires_at, created_at FROM api_keys WHERE id = ?',
                 [$id],
             ),
-            'notice' => 'Copy this key now. Only a hash of it is stored, so it cannot be shown again — '
-                      . 'if it is lost, revoke it and create another.',
+            'warning' => 'Copy this key now. Only a hash of it is stored, so it cannot be shown again — '
+                       . 'if it is lost, revoke it and create another.',
         ], 201);
     }
 

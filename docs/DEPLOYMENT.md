@@ -276,6 +276,32 @@ Two consequences worth planning for:
 
 ## Upgrading
 
+Check whether there is anything to do:
+
+```bash
+php /home/<account>/loanerpool-src/bin/update.php
+```
+
+Or in the app: **Settings → Software updates**. If the server blocks outbound
+HTTPS — many shared hosts do — the panel says so rather than claiming you are
+up to date.
+
+To apply it, on the server:
+
+```bash
+php /home/<account>/loanerpool-src/bin/update.php --apply
+```
+
+That pulls the new code and runs any database migrations, printing what it did.
+Back up the database and `data/` first. If the checkout has local edits it
+refuses and tells you, rather than overwriting them.
+
+Applying is deliberately not possible from the browser. A web page that could
+pull code and change the schema is a way into the server the day its
+credentials leak.
+
+### Manually
+
 1. Back up `data/config.json`, `data/uploads/`, and take a database dump.
 2. Upload the new files over the old ones, leaving `data/` alone.
 3. Run the migrations by loading any page — they apply on the first request

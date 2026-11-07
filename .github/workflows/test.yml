@@ -160,6 +160,22 @@ jobs:
           done < <(find app public scripts bin -name '*.php')
           exit $failed
 
+      - name: Check for accidental use of deprecated calls
+        # PHP 8.5 deprecated curl_close(), and the error handler used to turn
+        # deprecations into exceptions — which would have broken every outgoing
+        # email the day a host upgraded. Deprecations are logged now, but the
+        # call itself should not come back.
+        run: |
+          # Comment lines are excluded — the notes explaining why it is gone
+          # mention it by name, and a check that trips on its own explanation
+          # is a check nobody keeps.
+          if grep -rn 'curl_close(' app bin public scripts --include='*.php' \
+               | grep -vE ':[0-9]+:[[:space:]]*(//|\*|#)'; then
+            echo "curl_close() is a deprecated no-op since PHP 8.0 — remove it."
+            exit 1
+          fi
+          echo "no deprecated curl_close() calls"
+
       - name: Parse every JavaScript file
         run: |
           failed=0

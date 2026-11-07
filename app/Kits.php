@@ -469,6 +469,10 @@ final class Kits
         return [
             'group_ref'  => $groupRef,
             'checked_in' => $checkedIn,
+            // Same list under the name the client counts. Kept as an alias
+            // rather than renamed because "checked_in" is a count on the bulk
+            // endpoint, and one name meaning two shapes is how this broke.
+            'returned'   => $checkedIn,
             'failed'     => $failed,
             'group'      => $group,
             // Complete means nothing from this group is still out.

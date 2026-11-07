@@ -152,6 +152,34 @@ the versioned path: it is the one that will not change under you.
 
 ---
 
+## Staying up to date
+
+```bash
+php bin/update.php
+```
+
+Asks GitHub whether a newer version exists and, if so, prints the command to
+apply it. **Settings → Software updates** does the same check in the browser.
+
+```bash
+php bin/update.php --apply
+```
+
+Pulls the update and runs any database migrations. Applying is command-line
+only on purpose: a web page that could pull code and change the schema would be
+a way in the day its credentials leaked, and this is software for agencies who
+would not spot that happening.
+
+It refuses rather than forces — an unclean checkout, a branch that cannot
+fast-forward, or `exec()` disabled all stop it with an explanation instead of a
+half-applied update. `--quiet` prints only when there is something to say, so
+`php bin/update.php --quiet` suits a weekly cron entry.
+
+Nothing about this installation is sent: the check is a request for the latest
+version number, with a User-Agent that names the software and not the site.
+
+---
+
 ## Accessibility
 
 Built to **WCAG 2.2 Level AA**, including the criteria new in 2.2:
@@ -179,11 +207,18 @@ light and dark schemes and in Windows High Contrast Mode.
 ```
 
 Drops and recreates the test database, runs the web installer through its own
-API, then exercises the application end to end — 229 checks covering
+API, then exercises the application end to end — 257 checks covering
 authentication, RBAC, spreadsheet import, barcode encoding, the loan
 lifecycle, the request workflow, kits and accessories, agreements and
 signatures, condition photos, the waitlist, repairs, funding reporting, bulk
 actions, scheduled jobs, password reset, API keys and the guard rails.
+
+The last block of those is an API/UI contract check. It asserts that every
+field the browser dereferences off a response is actually in it, which the
+end-to-end suite does not catch: that suite greps responses for the fields
+*it* cares about, not the ones the views read. It exists because renaming a
+response field during the PHP port made saving email settings fail with
+"undefined is not an object" on a screen that had just reported success.
 
 Barcode encoders alone, with no database:
 
@@ -243,6 +278,7 @@ app/                    Application code, above the document root
   Attachments.php       Condition photos and signature images
   Reports.php           Usage, demand, idle stock and funding analytics
   Jobs.php              Scheduled reminders and housekeeping
+  Updates.php           Update checking against GitHub
   Scan.php              Barcode lookup and phone pairing
   Notifications.php     What to say and who should hear it
   Mailer.php            Microsoft Graph client
@@ -256,6 +292,7 @@ app/                    Application code, above the document root
   Routes/               One module per resource group
 
 bin/run-jobs.php        Cron entry point for the scheduled jobs
+bin/update.php          Check for and apply updates from GitHub
 schema.sql              Full DDL for a fresh install
 data/                   Config file and uploads — created at install, never web-served
 docs/                   Deployment guide

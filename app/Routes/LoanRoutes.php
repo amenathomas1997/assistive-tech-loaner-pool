@@ -153,12 +153,17 @@ final class LoanRoutes
             'actorId'          => $auth['userId'] ?? null,
         ]);
 
-        Notifications::send(Audit::actor($request), $organizationId, 'checked_out',
+        $notification = Notifications::send(Audit::actor($request), $organizationId, 'checked_out',
             $loan + ['__loan_id' => (int) $loan['id']]);
 
         Response::json([
             'loan'   => $loan,
             'notice' => self::checkOutNotice($organizationId, $loan),
+            // Surfaced so the desk learns the email did not go out while the
+            // client is still standing there, rather than discovering it when
+            // nobody turns up to return the device. Never fatal: the loan has
+            // already happened by this point.
+            'notification' => $notification,
         ], 201);
     }
 
@@ -225,7 +230,7 @@ final class LoanRoutes
             'actorId'          => $auth['userId'] ?? null,
         ]);
 
-        Notifications::send(Audit::actor($request), $organizationId, 'checked_in',
+        $notification = Notifications::send(Audit::actor($request), $organizationId, 'checked_in',
             $result['loan'] + ['__loan_id' => (int) $result['loan']['id']]);
 
         // What did not come back is the single most important thing to put in
@@ -235,7 +240,14 @@ final class LoanRoutes
 
         Response::json($result + [
             'missing_accessories' => $missing,
-            'notice' => self::checkInNotice($result, $missing),
+            'notice'  => self::checkInNotice($result, $missing),
+            // A separate field from "notice" because the client raises this one
+            // as its own warning: something physically did not come back, and
+            // it has to be noticed now rather than read in a summary line.
+            'warning' => $missing === []
+                ? null
+                : 'Not returned: ' . implode(', ', $missing) . '.',
+            'notification' => $notification,
         ]);
     }
 

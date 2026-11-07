@@ -423,7 +423,7 @@ final class Devices
             'changed'      => count($changed),
             'failed_count' => count($skipped),
             'devices'      => $changed,
-            'failures'     => $skipped,
+            'failed'       => $skipped,
             'summary'      => sprintf(
                 '%d device%s set to %s%s.',
                 count($changed), count($changed) === 1 ? '' : 's',

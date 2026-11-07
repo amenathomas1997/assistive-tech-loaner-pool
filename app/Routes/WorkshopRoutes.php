@@ -710,7 +710,9 @@ final class WorkshopRoutes
             'checked_in'    => count($checkedIn),
             'failed_count'  => count($failed),
             'loans'         => $checkedIn,
-            'failures'      => $failed,
+            // The client renders this as a table of what could not be done, so
+            // it is the rows, not a count. The count is failed_count.
+            'failed'        => $failed,
             'summary'       => sprintf(
                 '%d device%s checked in%s.',
                 count($checkedIn), count($checkedIn) === 1 ? '' : 's',

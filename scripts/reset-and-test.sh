@@ -110,8 +110,13 @@ echo "==> Running feature suite"
 ./scripts/e2e-features.sh "http://localhost:$PORT"
 FEATURE_RESULT=$?
 
+echo "==> Checking the API/UI contract"
+./scripts/verify-ui-contract.sh "http://localhost:$PORT"
+CONTRACT_RESULT=$?
+
 # Fail the run if either suite failed. Assigned explicitly rather than through
 # a short-circuit, so the exit status of the test itself is not what escapes.
 if [ "$RESULT" -eq 0 ]; then RESULT=$FEATURE_RESULT; fi
+if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRACT_RESULT; fi
 
 exit "$RESULT"

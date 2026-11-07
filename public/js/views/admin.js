@@ -116,6 +116,18 @@ export async function renderSettings() {
   const statusBox = el('div');
   const renderStatus = (status) => {
     clear(statusBox);
+
+    // Defensive: this is fed straight from a server response, and a missing
+    // field should degrade to "we cannot tell" rather than throwing and
+    // leaving the administrator looking at a half-rendered settings page.
+    if (!status) {
+      statusBox.append(alertBox(
+        'Saved, but the server did not report whether email is working. Reload the page to check.',
+        { type: 'warn', title: 'Status unknown' },
+      ));
+      return;
+    }
+
     if (status.usable) {
       statusBox.append(alertBox(
         `Email is configured and switched on, sending from ${status.sender}.`,
@@ -155,7 +167,12 @@ export async function renderSettings() {
           onClick: async (close) => {
             try {
               const result = await api.testEmail(recipientField.control.value.trim());
-              toastOk(`Test sent from ${result.sender} to ${result.recipient}. Check the inbox.`);
+              toastOk(
+                result.sender
+                  ? `Test sent from ${result.sender} to ${result.recipient}. Check the inbox.`
+                  : 'Test message sent. Check the inbox.',
+              );
+              if (result.mail_status) renderStatus(result.mail_status);
               close(true);
             } catch (err) {
               recipientField.setError(err.message);
@@ -366,9 +383,134 @@ export async function renderSettings() {
     agreementsSection(settings, readOnly),
     photosSection(settings, readOnly),
     schedulerSection(),
+    updatesSection(readOnly),
   );
 
   return container;
+}
+
+// --- Updates ---------------------------------------------------------------
+
+/**
+ * Whether this installation is behind the published version.
+ *
+ * Loaded after the page rather than with it: many shared hosts block outbound
+ * HTTPS, and an update check that cannot complete must not hold up the
+ * settings screen. Checking only — applying an update is a command on the
+ * server, and the panel shows which one.
+ */
+function updatesSection(readOnly) {
+  const body = el('div', {}, el('p', { class: 'muted', text: 'Checking for updates…' }));
+
+  const checkButton = el('button', {
+    type: 'button', class: 'btn', disabled: readOnly,
+  }, 'Check now');
+
+  const render = (result) => {
+    const local = result.local || {};
+    const rows = [
+      el('dt', { text: 'Version' }),
+      el('dd', { text: `${local.app_version || '—'} (database schema ${local.schema_version ?? '—'})` }),
+      el('dt', { text: 'Installed from' }),
+      el('dd', { text: local.install_method === 'git' ? 'a git clone' : 'uploaded files' }),
+    ];
+
+    if (local.commit_short) {
+      rows.push(
+        el('dt', { text: 'Code version' }),
+        el('dd', { class: 'mono', text: `${local.commit_short}${local.branch ? ` on ${local.branch}` : ''}` }),
+      );
+    }
+
+    clear(body);
+
+    if (result.reachable === false) {
+      body.append(
+        alertBox(
+          `${result.summary} ${result.detail || ''}`.trim(),
+          { type: 'info', title: 'Cannot check from this server' },
+        ),
+        el('dl', { class: 'detail-list' }, rows),
+      );
+      return;
+    }
+
+    if (result.up_to_date === true) {
+      body.append(
+        alertBox('This installation is running the latest published version.',
+          { type: 'ok', title: 'Up to date' }),
+        el('dl', { class: 'detail-list' }, rows),
+      );
+      return;
+    }
+
+    const how = result.how_to_apply;
+
+    body.append(
+      alertBox(result.summary, { type: 'warn', title: 'An update is available' }),
+      el('dl', { class: 'detail-list' }, rows),
+
+      local.has_local_changes === true
+        ? alertBox(
+            'This checkout has uncommitted local changes. Review them before updating, or they will ' +
+            'conflict with the update.',
+            { type: 'warn', title: 'Local changes on the server' },
+          )
+        : null,
+
+      how
+        ? el('div', {}, [
+            el('h3', { text: 'How to update' }),
+            el('ol', {}, how.steps.map((step) => el('li', { text: step }))),
+            how.command
+              ? el('div', {}, [
+                  el('p', { class: 'label', text: 'Run this on the server' }),
+                  el('p', { class: 'mono key-reveal', text: how.command }),
+                ])
+              : null,
+            how.notice ? el('p', { class: 'field-help', text: how.notice }) : null,
+            el('p', { class: 'field-help' },
+              'Updates are applied from the command line on purpose. A web page that could pull code ' +
+              'and change the database would be a way in if its credentials ever leaked.'),
+          ])
+        : null,
+
+      result.latest && result.latest.url
+        ? el('a', { class: 'btn', href: result.latest.url, target: '_blank', rel: 'noopener' },
+            'See what changed')
+        : null,
+    );
+  };
+
+  checkButton.addEventListener('click', async () => {
+    await withBusy(checkButton, 'Checking…', async () => {
+      try {
+        render(await api.checkUpdates());
+      } catch (err) {
+        clear(body).append(alertBox(err.message, { type: 'danger', title: 'Could not check' }));
+      }
+    });
+  });
+
+  api.updates()
+    .then(render)
+    .catch((err) => {
+      clear(body).append(alertBox(err.message, { type: 'info', title: 'Could not check for updates' }));
+    });
+
+  return el('section', { class: 'card', 'aria-labelledby': 'updates-heading' }, [
+    el('div', { class: 'card-header' }, [
+      el('h2', { id: 'updates-heading', text: 'Software updates' }),
+      checkButton,
+    ]),
+    el('p', {
+      class: 'muted',
+      text:
+        'This checks github.com for a newer version. It never installs anything on its own, and it ' +
+        'sends nothing about this installation — only a request for the latest version number.',
+    }),
+    body,
+  ]);
 }
 
 // --- Loan agreements -------------------------------------------------------

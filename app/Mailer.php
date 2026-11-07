@@ -263,7 +263,8 @@ final class Mailer
         $status   = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $error    = curl_error($ch);
 
-        curl_close($ch);
+        // No curl_close(): since PHP 8.0 the handle is freed when it goes out
+        // of scope, and 8.5 deprecates the call outright.
 
         if ($response === false) {
             throw new HttpError(

@@ -61,6 +61,18 @@ set_error_handler(static function (int $severity, string $message, string $file,
     if (!(error_reporting() & $severity)) {
         return false;
     }
+
+    // Deprecations are logged, never thrown. They are a warning about a future
+    // PHP release, not a fault in this request, and turning them into
+    // exceptions means a new PHP version breaks working features the day the
+    // host upgrades: PHP 8.5 deprecated curl_close(), which would otherwise
+    // have made every outgoing email throw on a server that was fine the day
+    // before. Logged rather than ignored, so they still get fixed.
+    if ($severity === E_DEPRECATED || $severity === E_USER_DEPRECATED) {
+        error_log("[deprecated] {$message} in {$file}:{$line}");
+        return true;
+    }
+
     throw new \ErrorException($message, 0, $severity, $file, $line);
 });
 
