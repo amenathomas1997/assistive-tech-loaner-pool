@@ -1,0 +1,43 @@
+# Front controller.
+#
+# A real file on disk is served directly; everything else goes to index.php,
+# which handles the API, the installer and client-side routing.
+#
+# The application source and the data directory are NOT in here — they live
+# above the document root — so nothing below needs to hide them.
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Pass HTTP Basic/Bearer credentials through to PHP. Apache with CGI or
+  # FastCGI strips the Authorization header unless told otherwise, which
+  # silently breaks every API-key request.
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  RewriteRule ^ index.php [L]
+</IfModule>
+
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+
+  # Application code carries no content hash in its filename, so a long
+  # max-age would strand users on stale JavaScript after a deploy with no way
+  # to tell them. "no-cache" means revalidate, not "never cache" — the browser
+  # still gets a cheap 304 when nothing changed.
+  <FilesMatch "\.(js|css|html)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+
+  # Third-party assets change only when the app is upgraded.
+  <FilesMatch "^jsQR\.js$">
+    Header set Cache-Control "public, max-age=86400"
+  </FilesMatch>
+</IfModule>
+
+# Directory listings are never wanted.
+Options -Indexes

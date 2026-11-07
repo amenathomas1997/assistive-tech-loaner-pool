@@ -15,3 +15,6 @@ node_modules/
 
 # Deployment notes containing account-specific details — never commit these.
 *.local.md
+
+# PHP
+/vendor/
