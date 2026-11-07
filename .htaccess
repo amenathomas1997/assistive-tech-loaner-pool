@@ -1,0 +1,17 @@
+# Passenger serves this application; Apache only needs to keep its own hands
+# off the source tree. cPanel's "Setup Node.js App" writes its own Passenger
+# directives above this block when the application is registered — do not
+# remove them.
+
+# Never serve the configuration file, the source, or the dependency tree as
+# static content. The Node application only serves public/, so this is
+# belt-and-braces for hosts that also expose the application root over HTTP.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^(data|src|scripts|node_modules|docs)/ - [F,L]
+  RewriteRule ^(package(-lock)?\.json|\.env.*|.*\.sql|.*\.md)$ - [F,L]
+</IfModule>
+
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+</IfModule>

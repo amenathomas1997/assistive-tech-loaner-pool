@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Assistive technology loaner pool: device inventory, barcode check-out and check-in, loan tracking and counselor requests.">
+  <title>Loaner Pool</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>">
+</head>
+<body>
+  <!--
+    Skip link is the first focusable element on every screen (WCAG 2.4.1).
+    It targets the main region, which the router re-renders in place.
+  -->
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+
+  <!--
+    The whole interface is rendered by JavaScript, so the initial markup is
+    only a shell. #app-root is replaced by either the sign-in screen or the
+    application shell once we know who is signed in.
+  -->
+  <div id="app-root">
+    <div class="centred-page">
+      <div class="centred-card">
+        <div class="card">
+          <div class="loading-block" role="status">
+            <span class="spinner" aria-hidden="true"></span> Starting Loaner Pool…
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <noscript>
+    <div class="centred-page">
+      <div class="centred-card">
+        <div class="card">
+          <h1>JavaScript is required</h1>
+          <p>
+            Loaner Pool needs JavaScript to run. Please enable it in your browser,
+            or contact your administrator if it is blocked by policy.
+          </p>
+        </div>
+      </div>
+    </div>
+  </noscript>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

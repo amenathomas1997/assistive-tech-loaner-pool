@@ -1,0 +1,14 @@
+# Runtime configuration and uploads.
+# config.json holds database credentials and the key that encrypts stored
+# secrets; uploads/ holds client condition photos and signatures. Neither
+# belongs in version control, ever.
+data/
+
+node_modules/
+*.log
+
+# Local editor and agent settings — machine-specific, not part of the project.
+.claude/
+.vscode/
+.idea/
+.DS_Store

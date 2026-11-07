@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Phone scanner — Loaner Pool</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📷</text></svg>">
+</head>
+<body>
+  <a class="skip-link" href="#scanner-main">Skip to the scanner</a>
+
+  <div class="centred-page" style="padding-top:20px;">
+    <div class="centred-card">
+      <div class="brand-block" style="text-align:center;margin-bottom:16px;">
+        <h1 style="font-size:1.25rem;margin-bottom:2px;">Phone scanner</h1>
+        <p class="muted" style="font-size:0.9rem;">Send barcodes to a Loaner Pool scan station.</p>
+      </div>
+
+      <main id="scanner-main" class="card">
+        <div id="scanner-root">
+          <div class="loading-block" role="status">
+            <span class="spinner" aria-hidden="true"></span> Loading…
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script type="module" src="/js/scanner.js"></script>
+</body>
+</html>

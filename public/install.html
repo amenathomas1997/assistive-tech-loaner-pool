@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Set up Loaner Pool</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>">
+</head>
+<body>
+  <a class="skip-link" href="#setup-main">Skip to the setup form</a>
+
+  <div class="centred-page">
+    <div class="centred-card install-card">
+
+      <div class="brand-block" style="text-align:center;margin-bottom:24px;">
+        <span class="brand-mark-lg" aria-hidden="true">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+            <line x1="12" y1="22.08" x2="12" y2="12"/>
+          </svg>
+        </span>
+        <h1>Set up Loaner Pool</h1>
+        <p class="muted">A few questions and this installation will be ready to use.</p>
+      </div>
+
+      <!--
+        The step list is decorative navigation, not interactive: steps are
+        reached by completing the previous one, so exposing them as links
+        would offer a journey that does not work.
+      -->
+      <ol class="install-steps" id="step-indicator" aria-label="Setup progress">
+        <li data-step="welcome">Welcome</li>
+        <li data-step="database">Database</li>
+        <li data-step="organisation">Organisation</li>
+        <li data-step="periods">Loan periods</li>
+        <li data-step="admin">Administrator</li>
+        <li data-step="done">Finish</li>
+      </ol>
+
+      <main id="setup-main" class="card">
+        <!--
+          Steps are rendered here by install.js. Focus moves to the step
+          heading on every change so a screen-reader user is told where they
+          are rather than being left at the top of the document.
+        -->
+        <div id="step-container">
+          <div class="loading-block" role="status">
+            <span class="spinner" aria-hidden="true"></span> Checking this server…
+          </div>
+        </div>
+      </main>
+
+      <p class="muted" style="margin-top:16px;font-size:0.86rem;text-align:center;">
+        Need help? Every step explains what it needs and why.
+        Nothing is written to the database until the final step.
+      </p>
+    </div>
+  </div>
+
+  <script type="module" src="/js/install.js"></script>
+</body>
+</html>

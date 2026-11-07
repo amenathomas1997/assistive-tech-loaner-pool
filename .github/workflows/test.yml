@@ -1,0 +1,131 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets a maintainer re-run the suite without pushing, e.g. to check that a
+  # dependency update outside this repo has not broken anything.
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} / ${{ matrix.db.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+        db:
+          # The schema is written to work on both engines, and the differences
+          # between them (CHECK constraints, JSON types, ADD COLUMN IF NOT
+          # EXISTS) are exactly the ones that break silently. Test both.
+          - name: MariaDB 10.6
+            image: mariadb:10.6
+          - name: MySQL 8.0
+            image: mysql:8.0
+        exclude:
+          # One engine per Node version is enough for the middle of the matrix;
+          # the oldest and newest supported Node get both.
+          - node: '20'
+            db: { name: MySQL 8.0, image: 'mysql:8.0' }
+
+    services:
+      database:
+        image: ${{ matrix.db.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MARIADB_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: loanerpool_test
+          MYSQL_USER: loaner
+          MYSQL_PASSWORD: loanerpooldev
+          MARIADB_DATABASE: loanerpool_test
+          MARIADB_USER: loaner
+          MARIADB_PASSWORD: loanerpooldev
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized || mysqladmin ping -h 127.0.0.1 -uroot -prootpassword"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Wait for the database
+        run: |
+          for i in $(seq 1 40); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -prootpassword --silent 2>/dev/null; then
+              echo "database is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "database did not become ready" >&2
+          exit 1
+
+      - name: Grant the test user rights to drop and recreate its database
+        # The suite drops and recreates the schema on every run, which needs
+        # more than the rights the service container grants by default.
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -uroot -prootpassword -e "
+            GRANT ALL PRIVILEGES ON *.* TO 'loaner'@'%';
+            FLUSH PRIVILEGES;"
+
+      - name: Verify the barcode encoders
+        # Runs standalone, with no database. The Code 128 and Code 39 tables
+        # are hand-transcribed, and a single mistyped digit produces a label
+        # that renders perfectly and scans as the wrong value.
+        run: node scripts/verify-barcode.js
+
+      - name: Run the full suite
+        env:
+          LP_DB_HOST: 127.0.0.1
+          LP_DB_PORT: '3306'
+          LP_DB_USER: loaner
+          LP_DB_PASS: loanerpooldev
+          LP_DB_NAME: loanerpool_test
+          LP_MYSQL_BIN: mysql
+          LP_PORT: '3000'
+        run: ./scripts/reset-and-test.sh
+
+      - name: Show the server log if anything failed
+        if: failure()
+        run: |
+          echo "--- server log ---"
+          cat /tmp/loaner-test-server.log || echo "(no log)"
+
+  lint:
+    name: Syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Parse every source file
+        # There is no bundler or transpiler in this project, so the files that
+        # ship are the files that run. A syntax error reaches production as a
+        # blank page, which this catches in seconds.
+        run: |
+          failed=0
+          while IFS= read -r file; do
+            node --check "$file" || { echo "FAILED: $file"; failed=1; }
+          done < <(find src public scripts -name '*.js' ! -path '*/vendor/*')
+          exit $failed
+
+      - name: Validate the OpenAPI document
+        run: node -e "JSON.parse(require('fs').readFileSync('docs/openapi.json','utf8')); console.log('openapi.json parses')"

@@ -1,0 +1,3196 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Loaner Pool API",
+    "version": "1.1.0",
+    "description": "Device inventory, barcode check-out and check-in, loan tracking, counselor requests, audit and reporting for an assistive technology loaner pool.\n\n## Authentication\n\nTwo schemes, both producing the same permission model:\n\n- **API key** (`Authorization: Bearer lp_<prefix>_<secret>`) \u2014 for integrations. Create keys under Settings \u2192 API keys. The plaintext is shown once and stored only as a hash.\n- **Session cookie** \u2014 used by the browser client. Not intended for third-party use.\n\n## Scopes\n\n| Scope   | Can do                                                        |\n|---------|---------------------------------------------------------------|\n| `read`  | List and view devices, loans, requests, clients, programs, reports |\n| `write` | Everything `read` can, plus check-out/check-in, create and edit records, approve requests |\n| `admin` | Everything, including settings, staff accounts and API keys    |\n\n## Errors\n\nEvery error uses the same envelope:\n\n```json\n{ \"error\": { \"code\": \"conflict\", \"message\": \"Human readable explanation.\", \"details\": { } } }\n```\n\n`message` is written to be shown to an end user. `code` is stable and safe to branch on. `details` carries machine-readable context such as the offending `field`.\n\n## Pagination\n\nList endpoints accept `page` and `per_page` (max 200) and return:\n\n```json\n{ \"data\": [ ], \"meta\": { \"page\": 1, \"per_page\": 50, \"total\": 132, \"total_pages\": 3 } }\n```\n\n## Rate limiting\n\nNone is enforced by the application. If you expose this to the internet, rate limit at the reverse proxy.",
+    "license": {
+      "name": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Authentication"
+    },
+    {
+      "name": "Devices"
+    },
+    {
+      "name": "Loans"
+    },
+    {
+      "name": "Requests"
+    },
+    {
+      "name": "Clients"
+    },
+    {
+      "name": "Programs"
+    },
+    {
+      "name": "Staff"
+    },
+    {
+      "name": "Scanning"
+    },
+    {
+      "name": "Reports"
+    },
+    {
+      "name": "Audit"
+    },
+    {
+      "name": "Administration"
+    },
+    {
+      "name": "Kits"
+    },
+    {
+      "name": "Waitlist"
+    },
+    {
+      "name": "Repairs"
+    },
+    {
+      "name": "Agreements"
+    },
+    {
+      "name": "Attachments"
+    },
+    {
+      "name": "Bulk"
+    },
+    {
+      "name": "Jobs"
+    }
+  ],
+  "security": [
+    {
+      "ApiKeyAuth": []
+    }
+  ],
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Sign in and receive a session cookie",
+        "description": "Intended for the browser client. Integrations should use an API key instead.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "423": {
+            "description": "Account locked after repeated failed attempts"
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Identify the current caller and list its permissions",
+        "responses": {
+          "200": {
+            "description": "Caller identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "actor_type": {
+                      "type": "string",
+                      "enum": [
+                        "user",
+                        "api_key"
+                      ]
+                    },
+                    "capabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "organization": {
+                      "$ref": "#/components/schemas/Organization"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/devices": {
+      "get": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "List devices",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Matches name, barcode, asset tag, serial, manufacturer, model or category."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "available",
+                "checked_out",
+                "reserved",
+                "maintenance",
+                "retired",
+                "lost"
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "program_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "overdue",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Only devices whose active loan is past its due date."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "One of name, barcode, status, category, asset_tag, created_at, due_at. Prefix with '-' to reverse."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of devices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Device"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Add a device",
+        "description": "A unique barcode is generated automatically unless one is supplied.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "409": {
+            "description": "Barcode, asset tag or serial number already in use"
+          }
+        }
+      }
+    },
+    "/devices/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Get one device with its loan history",
+        "responses": {
+          "200": {
+            "description": "Device and loan history"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Update a device",
+        "description": "Only fields present in the body are changed. Changing the status of a device that is on loan is refused.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Delete a device",
+        "description": "Only permitted for devices with no loan history. Anything else must be retired instead, so the audit trail stays intact.",
+        "responses": {
+          "200": {
+            "description": "Deleted"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/devices/lookup/{code}": {
+      "get": {
+        "tags": [
+          "Devices",
+          "Scanning"
+        ],
+        "summary": "Resolve a barcode or asset tag to a device",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The device, its active loan if any, and the action that should follow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "device": {
+                      "$ref": "#/components/schemas/Device"
+                    },
+                    "active_loan": {
+                      "$ref": "#/components/schemas/Loan"
+                    },
+                    "suggested_action": {
+                      "type": "string",
+                      "enum": [
+                        "check_out",
+                        "check_in",
+                        "blocked"
+                      ]
+                    },
+                    "blocked_reason": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/devices/import": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Import devices from CSV",
+        "description": "Send the file contents as text, not as multipart. Defaults to a dry run: pass `dry_run: false` to commit. Existing devices are matched by barcode, then serial number, then asset tag, and updated rather than duplicated. New devices are allocated a barcode.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "content"
+                ],
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "The raw CSV text."
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "mapping": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Spreadsheet header -> device field. Omit to auto-detect."
+                  },
+                  "dry_run": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "update_existing": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "default_status": {
+                    "type": "string",
+                    "default": "available"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import result, or a preview when dry_run is true"
+          }
+        }
+      }
+    },
+    "/devices/import/preview": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Parse a CSV and propose a column mapping without touching the database",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "content"
+                ],
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Headers, sample rows and a suggested mapping"
+          }
+        }
+      }
+    },
+    "/devices/labels": {
+      "get": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Printable barcode label sheet (HTML)",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated device ids. Omit to print everything matching the other filters."
+          },
+          {
+            "name": "symbology",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "qr",
+                "code128",
+                "code39"
+              ]
+            }
+          },
+          {
+            "name": "columns",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 3
+            }
+          },
+          {
+            "name": "label_width_mm",
+            "in": "query",
+            "schema": {
+              "type": "number",
+              "default": 63.5
+            }
+          },
+          {
+            "name": "label_height_mm",
+            "in": "query",
+            "schema": {
+              "type": "number",
+              "default": 38.1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An HTML page ready to print",
+            "content": {
+              "text/html": {}
+            }
+          }
+        }
+      }
+    },
+    "/devices/{id}/barcode.svg": {
+      "get": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Barcode image for one device",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "name": "symbology",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "qr",
+                "code128",
+                "code39"
+              ]
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SVG",
+            "content": {
+              "image/svg+xml": {}
+            }
+          }
+        }
+      }
+    },
+    "/devices/export.csv": {
+      "get": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Export the inventory as CSV",
+        "responses": {
+          "200": {
+            "description": "CSV",
+            "content": {
+              "text/csv": {}
+            }
+          }
+        }
+      }
+    },
+    "/loans": {
+      "get": {
+        "tags": [
+          "Loans"
+        ],
+        "summary": "List loans",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "returned",
+                "cancelled",
+                "overdue",
+                "due_soon"
+              ]
+            },
+            "description": "`overdue` and `due_soon` are derived, not stored."
+          },
+          {
+            "name": "device_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "tech_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "program_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of loans",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Loan"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/loans/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Loans"
+        ],
+        "summary": "Get a loan with its full timeline",
+        "responses": {
+          "200": {
+            "description": "Loan and timeline"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/loans/periods": {
+      "get": {
+        "tags": [
+          "Loans"
+        ],
+        "summary": "List the configured loan periods",
+        "responses": {
+          "200": {
+            "description": "Loan periods, default first"
+          }
+        }
+      }
+    },
+    "/loans/checkout": {
+      "post": {
+        "tags": [
+          "Loans"
+        ],
+        "summary": "Check a device out",
+        "description": "A device may be held by any combination of a technician, a client and a program; at least one is required by default. `device` accepts a scanned barcode, an asset tag or a numeric device id, so the scanner, typed and pick-from-list paths behave identically.\n\nConcurrency is handled with a row lock, so two simultaneous check-outs of the same device cannot both succeed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "device"
+                ],
+                "properties": {
+                  "device": {
+                    "type": "string",
+                    "description": "Barcode, asset tag, or device id."
+                  },
+                  "client_id": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "tech_id": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "program_id": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "loan_period_id": {
+                    "type": "integer",
+                    "nullable": true,
+                    "description": "Omit to use the organisation default."
+                  },
+                  "custom_days": {
+                    "type": "integer",
+                    "nullable": true,
+                    "description": "Overrides loan_period_id. 0 means an open-ended loan with no due date."
+                  },
+                  "condition_out": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "notes": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "scanned": {
+                    "type": "boolean",
+                    "description": "Records how the transaction happened, for the scan-adoption report."
+                  },
+                  "request_id": {
+                    "type": "integer",
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Loan created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "loan": {
+                      "$ref": "#/components/schemas/Loan"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No device matches that identifier"
+          },
+          "409": {
+            "description": "Device already on loan, not lendable, or the client is over a configured limit"
+          }
+        }
+      }
+    },
+    "/loans/checkin": {
+      "post": {
+        "tags": [
+          "Loans"
+        ],
+        "summary": "Check a device back in",
+        "description": "Accepts either a device barcode or a loan id \u2014 at a returns desk the only thing in hand is the device itself.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "device": {
+                    "type": "string",
+                    "description": "Barcode or asset tag."
+                  },
+                  "loan_id": {
+                    "type": "integer"
+                  },
+                  "condition_in": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "notes": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "device_status": {
+                    "type": "string",
+                    "enum": [
+                      "available",
+                      "maintenance"
+                    ],
+                    "default": "available",
+                    "description": "Use `maintenance` for a device that came back damaged."
+                  },
+                  "scanned": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returned. Includes `wasOverdue` and `daysLate`."
+          },
+          "409": {
+            "description": "That device is not currently on loan"
+          }
+        }
+      }
+    },
+    "/loans/{id}/extend": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Loans"
+        ],
+        "summary": "Extend a loan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "days": {
+                    "type": "integer"
+                  },
+                  "due_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "override_limit": {
+                    "type": "boolean",
+                    "description": "Administrators only. Ignores the period's extension cap."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Extended"
+          },
+          "409": {
+            "description": "Extension limit reached"
+          }
+        }
+      }
+    },
+    "/loans/{id}/reduce": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Loans"
+        ],
+        "summary": "Bring a loan's return date forward",
+        "responses": {
+          "200": {
+            "description": "Adjusted"
+          }
+        }
+      }
+    },
+    "/loans/{id}/cancel": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Loans"
+        ],
+        "summary": "Cancel a loan",
+        "description": "For a loan that should not have happened. The device returns to the pool, but the loan is excluded from utilisation figures \u2014 unlike a normal check-in.",
+        "responses": {
+          "200": {
+            "description": "Cancelled"
+          }
+        }
+      }
+    },
+    "/loans/{id}/transfer": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Loans"
+        ],
+        "summary": "Move an active loan to a different holder without a return trip",
+        "responses": {
+          "200": {
+            "description": "Transferred"
+          }
+        }
+      }
+    },
+    "/requests": {
+      "get": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "List loan requests",
+        "description": "Counselors see only their own requests; technicians and administrators see all.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "submitted",
+                "approved",
+                "denied",
+                "cancelled",
+                "fulfilled"
+              ]
+            }
+          },
+          {
+            "name": "fulfillment_state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "provisioning",
+                "in_transit",
+                "ready_pickup",
+                "delivered"
+              ]
+            }
+          },
+          {
+            "name": "open",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Only submitted or approved requests."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of requests"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "Submit a loan request",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "client_id": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "program_id": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "device_id": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "requested_category": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "requested_details": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "justification": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "needed_by": {
+                    "type": "string",
+                    "format": "date",
+                    "nullable": true
+                  },
+                  "loan_period_id": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "delivery_mode": {
+                    "type": "string",
+                    "enum": [
+                      "vrc_pickup",
+                      "deliver_to_client",
+                      "client_pickup"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Submitted"
+          },
+          "400": {
+            "description": "Nothing identifiable was requested"
+          }
+        }
+      }
+    },
+    "/requests/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "Get one request",
+        "responses": {
+          "200": {
+            "description": "Request"
+          },
+          "403": {
+            "description": "A counselor may only view their own requests"
+          }
+        }
+      }
+    },
+    "/requests/{id}/approve": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "Approve a request",
+        "description": "Optionally reserves a device so nobody lends it out before the request is fulfilled.",
+        "responses": {
+          "200": {
+            "description": "Approved"
+          },
+          "409": {
+            "description": "Already reviewed, or the chosen device is unavailable"
+          }
+        }
+      }
+    },
+    "/requests/{id}/deny": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "Decline a request",
+        "description": "A reason is required \u2014 it is shown to the counselor and included in the notification.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "notes"
+                ],
+                "properties": {
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Declined"
+          },
+          "400": {
+            "description": "No reason given"
+          }
+        }
+      }
+    },
+    "/requests/{id}/fulfillment": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "Move a request along its fulfilment track",
+        "description": "Valid transitions only. `delivered` cannot be set here \u2014 use the fulfil endpoint, which creates the loan record.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "state"
+                ],
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "provisioning",
+                      "in_transit",
+                      "ready_pickup"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "State changed"
+          },
+          "409": {
+            "description": "Invalid transition"
+          }
+        }
+      }
+    },
+    "/requests/{id}/fulfil": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "Hand the device over and create the loan",
+        "description": "Also available at `/requests/{id}/fulfill`. Releases any reservation, creates the loan with the request's client, technician and program, and closes the request.",
+        "responses": {
+          "200": {
+            "description": "Loan created and request fulfilled"
+          }
+        }
+      }
+    },
+    "/requests/{id}/cancel": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Requests"
+        ],
+        "summary": "Cancel a request and release any reserved device",
+        "responses": {
+          "200": {
+            "description": "Cancelled"
+          }
+        }
+      }
+    },
+    "/clients": {
+      "get": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "List clients",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of clients"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Add a client",
+        "responses": {
+          "201": {
+            "description": "Created"
+          }
+        }
+      }
+    },
+    "/clients/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Get a client with their loan history",
+        "responses": {
+          "200": {
+            "description": "Client and loans"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Update a client",
+        "responses": {
+          "200": {
+            "description": "Updated"
+          }
+        }
+      }
+    },
+    "/programs": {
+      "get": {
+        "tags": [
+          "Programs"
+        ],
+        "summary": "List programs with usage counts",
+        "responses": {
+          "200": {
+            "description": "Programs"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Programs"
+        ],
+        "summary": "Add a program",
+        "responses": {
+          "201": {
+            "description": "Created"
+          }
+        }
+      }
+    },
+    "/programs/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Programs"
+        ],
+        "summary": "Update a program",
+        "responses": {
+          "200": {
+            "description": "Updated"
+          }
+        }
+      }
+    },
+    "/users": {
+      "get": {
+        "tags": [
+          "Staff"
+        ],
+        "summary": "List staff accounts",
+        "parameters": [
+          {
+            "name": "role",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "admin",
+                "tech",
+                "vrc",
+                "viewer"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Staff"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Staff"
+        ],
+        "summary": "Create a staff account",
+        "responses": {
+          "201": {
+            "description": "Created"
+          }
+        }
+      }
+    },
+    "/users/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Staff"
+        ],
+        "summary": "Update a staff account",
+        "description": "Deactivating or changing a role ends every session that account holds. The last active administrator cannot be demoted or deactivated.",
+        "responses": {
+          "200": {
+            "description": "Updated"
+          },
+          "400": {
+            "description": "Would leave the organisation with no administrator"
+          }
+        }
+      }
+    },
+    "/scan/lookup": {
+      "post": {
+        "tags": [
+          "Scanning"
+        ],
+        "summary": "Resolve a scanned barcode",
+        "description": "POST rather than GET so barcodes do not accumulate in access logs. Scanner noise is normalised first: carriage returns, tabs, AIM symbology identifiers and Code 39 framing asterisks are all stripped, and the value is upper-cased.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "barcode"
+                ],
+                "properties": {
+                  "barcode": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Device, active loan and suggested action"
+          },
+          "404": {
+            "description": "No match"
+          }
+        }
+      }
+    },
+    "/scan/channels": {
+      "post": {
+        "tags": [
+          "Scanning"
+        ],
+        "summary": "Open a remote-scanner pairing channel",
+        "description": "Returns a short pairing code and a QR of the join URL. A phone joins the channel and pushes scans, which are relayed to the desktop over Server-Sent Events. Session-authenticated callers only \u2014 EventSource cannot send an Authorization header.",
+        "responses": {
+          "201": {
+            "description": "Channel opened"
+          },
+          "403": {
+            "description": "Remote scanning is disabled in settings"
+          }
+        }
+      }
+    },
+    "/scan/channels/{id}/stream": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Scanning"
+        ],
+        "summary": "Server-Sent Events stream of scans pushed to this channel",
+        "responses": {
+          "200": {
+            "description": "text/event-stream. Events: `scan`, `closed`.",
+            "content": {
+              "text/event-stream": {}
+            }
+          }
+        }
+      }
+    },
+    "/scan/join/{code}": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Scanning"
+        ],
+        "summary": "Check a pairing code is live before starting the camera",
+        "responses": {
+          "200": {
+            "description": "Channel details"
+          },
+          "404": {
+            "description": "Unknown or expired code"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Scanning"
+        ],
+        "summary": "Push a scan from a phone to the paired station",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "barcode"
+                ],
+                "properties": {
+                  "barcode": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Delivery result. `delivered_to_station` is false when no station is listening."
+          }
+        }
+      }
+    },
+    "/reports": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "The full report bundle in one request",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Summary, categories, activity, trend, returns, requests, idle devices and scan adoption"
+          }
+        }
+      }
+    },
+    "/reports/summary": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Headline counts for a dashboard",
+        "responses": {
+          "200": {
+            "description": "Device, loan and request counts"
+          }
+        }
+      }
+    },
+    "/reports/devices": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Per-device usage frequency",
+        "description": "Cancelled loans are excluded throughout, since a loan cancelled because the wrong barcode was scanned is not a use of the device. `total_days_out` counts open loans up to now, so a device out for six months is not reported as zero until it returns.",
+        "parameters": [
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "loan_count",
+                "days_out",
+                "never_used",
+                "last_used",
+                "name",
+                "overdue"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Device utilisation"
+          }
+        }
+      }
+    },
+    "/reports/idle": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Devices never loaned, or not loaned recently",
+        "parameters": [
+          {
+            "name": "since_days",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 180
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Idle devices"
+          }
+        }
+      }
+    },
+    "/reports/categories": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Demand and supply per equipment category",
+        "responses": {
+          "200": {
+            "description": "Category demand, including turns per device"
+          }
+        }
+      }
+    },
+    "/reports/activity/{holder}": {
+      "parameters": [
+        {
+          "name": "holder",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "tech",
+              "client",
+              "program"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Loan activity grouped by holder",
+        "responses": {
+          "200": {
+            "description": "Activity"
+          }
+        }
+      }
+    },
+    "/audit": {
+      "get": {
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Search the audit log",
+        "description": "Append-only. Nothing in the application ever updates or deletes these rows, including administrators.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact action, e.g. `loan.checked_out`."
+          },
+          {
+            "name": "action_prefix",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Group prefix, e.g. `loan`."
+          },
+          {
+            "name": "entity_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of audit entries"
+          }
+        }
+      }
+    },
+    "/admin/settings": {
+      "get": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Read settings",
+        "description": "Secrets are never returned; each is replaced by an `__is_set` flag and a masked hint.",
+        "responses": {
+          "200": {
+            "description": "Settings, their schema, and mail status"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Update settings",
+        "description": "Unknown keys are ignored and reported rather than stored. A secret sent as an empty string is left unchanged, so saving a form with a masked field cannot wipe it; send `__CLEAR__` to remove one.",
+        "responses": {
+          "200": {
+            "description": "Updated, with the list of keys that changed"
+          }
+        }
+      }
+    },
+    "/admin/api-keys": {
+      "get": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "List API keys",
+        "responses": {
+          "200": {
+            "description": "Keys, masked"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Create an API key",
+        "description": "The plaintext key is returned once and only once \u2014 only its SHA-256 hash is stored.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "read",
+                        "write",
+                        "admin"
+                      ]
+                    }
+                  },
+                  "expires_in_days": {
+                    "type": "integer",
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created. `key` is the plaintext."
+          }
+        }
+      }
+    },
+    "/admin/api-keys/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "delete": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Revoke an API key immediately",
+        "responses": {
+          "200": {
+            "description": "Revoked"
+          }
+        }
+      }
+    },
+    "/admin/loan-periods": {
+      "get": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "List loan periods",
+        "responses": {
+          "200": {
+            "description": "Loan periods"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Create a loan period",
+        "description": "`days: 0` creates an open-ended period with no due date.",
+        "responses": {
+          "201": {
+            "description": "Created"
+          }
+        }
+      }
+    },
+    "/admin/loan-periods/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Update a loan period",
+        "responses": {
+          "200": {
+            "description": "Updated"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Administration"
+        ],
+        "summary": "Remove a loan period",
+        "description": "A period already used by a loan is deactivated rather than deleted, so historic loans keep their policy.",
+        "responses": {
+          "200": {
+            "description": "Deleted or deactivated"
+          }
+        }
+      }
+    },
+    "/kits": {
+      "get": {
+        "tags": [
+          "Kits"
+        ],
+        "summary": "List kits with availability",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Each kit reports `can_check_out`, which is true only when every required member is free."
+      },
+      "post": {
+        "tags": [
+          "Kits"
+        ],
+        "summary": "Create a kit",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "device_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/kits/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Kits"
+        ],
+        "summary": "Get one kit and its devices",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Kits"
+        ],
+        "summary": "Update a kit",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Kits"
+        ],
+        "summary": "Delete a kit",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "The devices in it are unaffected and keep their history."
+      }
+    },
+    "/kits/{id}/checkout": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Kits"
+        ],
+        "summary": "Check out every device in a kit",
+        "responses": {
+          "201": {
+            "description": "Loans created, with `group_ref`, `loans` and `skipped`"
+          }
+        },
+        "description": "Issues one loan per device under a shared `group_ref`, so the \"one active loan per device\" invariant still holds and each unit keeps its own history. Members that are unavailable are reported in `skipped` rather than failing the whole kit \u2014 a partly issued kit that says so is more useful at the desk than an all-or-nothing error."
+      }
+    },
+    "/kits/accessories/{deviceId}": {
+      "parameters": [
+        {
+          "name": "deviceId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Kits"
+        ],
+        "summary": "A device's accessory checklist",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Kits"
+        ],
+        "summary": "Replace the accessory checklist",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Accessories are a checklist on the device, not tracked items with their own barcodes \u2014 a charger is what goes missing, but is not worth its own asset record.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "accessories": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/groups/{groupRef}": {
+      "parameters": [
+        {
+          "name": "groupRef",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Kits"
+        ],
+        "summary": "Every loan sharing a group reference",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/groups/{groupRef}/checkin": {
+      "parameters": [
+        {
+          "name": "groupRef",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Kits"
+        ],
+        "summary": "Check a whole kit back in",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Each device is returned independently; failures are reported per device."
+      }
+    },
+    "/reservations": {
+      "get": {
+        "tags": [
+          "Waitlist"
+        ],
+        "summary": "List waitlist entries",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Counselors see only their own. `queue_position` is computed from (priority DESC, created_at ASC) and never stored, so it cannot drift."
+      },
+      "post": {
+        "tags": [
+          "Waitlist"
+        ],
+        "summary": "Join the waitlist",
+        "responses": {
+          "201": {
+            "description": "Queued"
+          },
+          "409": {
+            "description": "Already on this waitlist"
+          }
+        },
+        "description": "Wait for one specific device, or for the next available device of a category. If something matching is free right now, the response says so in `available_now` rather than silently queueing behind nothing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "device_id": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "category": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "client_id": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "priority": {
+                    "type": "integer"
+                  },
+                  "needed_from": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reservations/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Waitlist"
+        ],
+        "summary": "Get one waitlist entry",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/reservations/{id}/cancel": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Waitlist"
+        ],
+        "summary": "Cancel a waitlist entry",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Any device being held is released and offered to the next person in the queue."
+      }
+    },
+    "/reservations/device/{deviceId}": {
+      "parameters": [
+        {
+          "name": "deviceId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Waitlist"
+        ],
+        "summary": "Who is waiting for this device or its category",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/repairs": {
+      "get": {
+        "tags": [
+          "Repairs"
+        ],
+        "summary": "List repair tickets",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Repairs"
+        ],
+        "summary": "Open a repair",
+        "responses": {
+          "201": {
+            "description": "Opened"
+          },
+          "409": {
+            "description": "Device on loan, or already has an open repair"
+          }
+        },
+        "description": "Moves the device to maintenance and out of the lendable pool. Refused while the device is on loan \u2014 it cannot be with a client and on the bench at once.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "device_id": {
+                    "type": "integer"
+                  },
+                  "fault": {
+                    "type": "string"
+                  },
+                  "vendor": {
+                    "type": "string"
+                  },
+                  "assigned_to": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "device_id",
+                  "fault"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repairs/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Repairs"
+        ],
+        "summary": "Get a repair with its timeline",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Repairs"
+        ],
+        "summary": "Update or close a repair",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Closing returns the device to the pool. Closing as `unrepairable` retires it instead, so broken equipment never goes back into circulation. A closed repair cannot be reopened \u2014 open a new one, so each fault keeps its own history."
+      }
+    },
+    "/repairs/summary": {
+      "get": {
+        "tags": [
+          "Repairs"
+        ],
+        "summary": "Repair spend, turnaround and repeat offenders",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/agreements/settings": {
+      "get": {
+        "tags": [
+          "Agreements"
+        ],
+        "summary": "Agreement wording and whether one is required",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/agreements/preview/{loanId}": {
+      "parameters": [
+        {
+          "name": "loanId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Agreements"
+        ],
+        "summary": "The wording for a loan, with placeholders filled in",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/agreements/{loanId}": {
+      "parameters": [
+        {
+          "name": "loanId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Agreements"
+        ],
+        "summary": "The signed agreement for a loan",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Agreements"
+        ],
+        "summary": "Record a signature",
+        "responses": {
+          "201": {
+            "description": "Recorded"
+          },
+          "409": {
+            "description": "This loan already has a signed agreement"
+          }
+        },
+        "description": "Four methods, all equal: `typed` (name as attestation), `drawn` (canvas image), `uploaded` (photo of a signed paper form) and `waived` (with a reason). Drawing is a dragging interaction, so offering the alternatives is what keeps this step reachable for someone who cannot use a pointer.\n\nThe wording is snapshotted onto the loan at signing time \u2014 later edits to the template never alter what somebody signed. One signature per loan; it cannot be replaced.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "signed_by_name": {
+                    "type": "string"
+                  },
+                  "signed_by_role": {
+                    "type": "string",
+                    "enum": [
+                      "client",
+                      "guardian",
+                      "counselor",
+                      "technician",
+                      "other"
+                    ]
+                  },
+                  "signature_method": {
+                    "type": "string",
+                    "enum": [
+                      "typed",
+                      "drawn",
+                      "uploaded",
+                      "waived"
+                    ]
+                  },
+                  "typed_signature": {
+                    "type": "string"
+                  },
+                  "signature_image": {
+                    "type": "string",
+                    "description": "base64 data URL"
+                  },
+                  "waived_reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "signed_by_name"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agreements/{loanId}/print": {
+      "parameters": [
+        {
+          "name": "loanId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Agreements"
+        ],
+        "summary": "Printable agreement (HTML)",
+        "responses": {
+          "200": {
+            "description": "HTML",
+            "content": {
+              "text/html": {}
+            }
+          }
+        },
+        "description": "HTML rather than PDF: it prints identically, needs no PDF dependency on shared hosting, and can be read by a screen reader."
+      }
+    },
+    "/attachments/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Id"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Attachments"
+        ],
+        "summary": "Stream a stored photo or signature",
+        "responses": {
+          "200": {
+            "description": "The image"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "description": "Authenticated and organisation-scoped. Files live outside the web root and are never at a guessable URL."
+      },
+      "delete": {
+        "tags": [
+          "Attachments"
+        ],
+        "summary": "Delete an attachment and its file",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/attachments/loan/{loanId}": {
+      "parameters": [
+        {
+          "name": "loanId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Attachments"
+        ],
+        "summary": "Attach condition photos to a loan",
+        "responses": {
+          "201": {
+            "description": "`stored` and `failed` arrays"
+          },
+          "403": {
+            "description": "Condition photos are disabled for this organisation"
+          }
+        },
+        "description": "Images arrive as base64 data URLs, resized by the browser first. Magic bytes are checked, not just the declared type. Partial success is reported rather than thrown: photos are optional, so one unreadable image must not fail the rest.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phase": {
+                    "type": "string",
+                    "enum": [
+                      "out",
+                      "in"
+                    ]
+                  },
+                  "images": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "phase",
+                  "images"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bulk/checkin": {
+      "post": {
+        "tags": [
+          "Bulk"
+        ],
+        "summary": "Check in many devices at once",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Each is attempted independently and the response reports both sides. At the end of a program twenty devices come back and one turns out not to be on loan \u2014 failing all twenty because of that one is unusable.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "devices": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "loan_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "condition_in": {
+                    "type": "string"
+                  },
+                  "device_status": {
+                    "type": "string",
+                    "enum": [
+                      "available",
+                      "maintenance"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bulk/device-status": {
+      "post": {
+        "tags": [
+          "Bulk"
+        ],
+        "summary": "Change the status of many devices",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Devices currently on loan are skipped and reported.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "device_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "device_ids",
+                  "status"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Scheduled job history and health",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "`healthy` is false when the reminder job has not completed successfully in the last 36 hours \u2014 which is how you find out reminders stopped going out."
+      }
+    },
+    "/jobs/run": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Run the scheduled work now",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Authenticated either by an administrator session or by an `X-Cron-Token` header, since a cron entry cannot hold a cookie. Safe to run concurrently: a loan chased in the last day is excluded by the query itself."
+      }
+    },
+    "/reports/funding": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Utilisation and spend by funding source",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Device-level and loan-level figures are aggregated separately. Summing purchase cost across a loan join would multiply each device's price by how often it was lent, overstating every number a funder is shown."
+      }
+    },
+    "/auth/forgot-password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Request a password reset link",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Always reports success, whether or not the address exists \u2014 anything else turns this into a way of enumerating staff. Tokens are single-use, stored only as a hash, and expire in an hour.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/auth/reset-password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Set a new password from a reset link",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "description": "Ends every session the account holds.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  },
+                  "new_password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token",
+                  "new_password"
+                ]
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An API key in the form `lp_<prefix>_<secret>`, sent as `Authorization: Bearer <key>`."
+      }
+    },
+    "parameters": {
+      "Id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "Page": {
+        "name": "page",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "PerPage": {
+        "name": "per_page",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 50
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing or invalid credentials",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Authenticated, but lacking the required permission",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No such record",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The request conflicts with the current state",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "example": "conflict"
+              },
+              "message": {
+                "type": "string",
+                "description": "Written to be shown to an end user."
+              },
+              "details": {
+                "type": "object",
+                "nullable": true,
+                "description": "Machine-readable context, such as the offending `field`."
+              }
+            }
+          }
+        }
+      },
+      "PageMeta": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "total_pages": {
+            "type": "integer"
+          }
+        }
+      },
+      "Organization": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "barcode_symbology": {
+            "type": "string",
+            "enum": [
+              "qr",
+              "code128",
+              "code39"
+            ]
+          },
+          "barcode_prefix": {
+            "type": "string"
+          }
+        }
+      },
+      "Device": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "barcode": {
+            "type": "string",
+            "description": "Globally unique. This is what a scanner reads.",
+            "example": "AT-7K3F9Q2M"
+          },
+          "asset_tag": {
+            "type": "string",
+            "nullable": true
+          },
+          "serial_number": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "manufacturer": {
+            "type": "string",
+            "nullable": true
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "checked_out",
+              "reserved",
+              "maintenance",
+              "retired",
+              "lost"
+            ]
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "current_holder": {
+            "type": "string",
+            "nullable": true,
+            "description": "Derived. Who has it right now."
+          },
+          "is_available": {
+            "type": "boolean",
+            "description": "Derived."
+          },
+          "is_overdue": {
+            "type": "boolean",
+            "description": "Derived from the active loan's due date."
+          },
+          "active_loan_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "active_loan_due_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "custom_fields": {
+            "type": "object",
+            "nullable": true,
+            "description": "Spreadsheet columns that did not map to a known field."
+          }
+        }
+      },
+      "DeviceInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "asset_tag": {
+            "type": "string",
+            "nullable": true
+          },
+          "serial_number": {
+            "type": "string",
+            "nullable": true
+          },
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "manufacturer": {
+            "type": "string",
+            "nullable": true
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "condition_note": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "owner_program_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "purchase_date": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "purchase_cost": {
+            "type": "number",
+            "nullable": true
+          },
+          "funding_source": {
+            "type": "string",
+            "nullable": true
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "Loan": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string",
+            "example": "LN-2026-4F7K2Q"
+          },
+          "device_id": {
+            "type": "integer"
+          },
+          "device_name": {
+            "type": "string"
+          },
+          "device_barcode": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "tech_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "program_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "holder_summary": {
+            "type": "string",
+            "description": "Derived one-line description of who holds the device."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "returned",
+              "cancelled"
+            ]
+          },
+          "checked_out_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Null means an open-ended loan with no return date."
+          },
+          "returned_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "is_overdue": {
+            "type": "boolean",
+            "description": "Derived, never stored \u2014 a row can never sit at 'active' while silently months overdue."
+          },
+          "days_overdue": {
+            "type": "integer"
+          },
+          "days_until_due": {
+            "type": "integer",
+            "nullable": true
+          },
+          "extension_count": {
+            "type": "integer"
+          },
+          "checkout_method": {
+            "type": "string",
+            "enum": [
+              "scan",
+              "manual",
+              "api",
+              "request"
+            ]
+          },
+          "checkin_method": {
+            "type": "string",
+            "enum": [
+              "scan",
+              "manual",
+              "api"
+            ],
+            "nullable": true
+          }
+        }
+      }
+    }
+  }
+}

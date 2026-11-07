@@ -1,0 +1,767 @@
+/**
+ * Application shell and router.
+ *
+ * Hash-based routing, because the app is served as static files behind
+ * Passenger on shared hosting where a history-API fallback for every path is
+ * not always configurable. The server does provide a fallback, but hash
+ * routing removes a whole class of "works locally, 404s on the host".
+ */
+
+import { api, ApiError, onSessionExpired } from './api.js';
+import {
+  el, clear, $, field, toast, toastError, toastOk, announce, alert as alertBox,
+  modal, confirmDialog, withBusy, focusHeading, loadingBlock,
+} from './ui.js';
+
+import { renderDashboard } from './views/dashboard.js';
+import { renderDevices, renderDeviceDetail, renderImport } from './views/devices.js';
+import { renderScanStation } from './views/scan.js';
+import { renderLoans, renderLoanDetail } from './views/loans.js';
+import { renderRequests, renderRequestDetail, renderNewRequest } from './views/requests.js';
+import { renderClients, renderPrograms, renderStaff } from './views/directory.js';
+import { renderSettings, renderApiKeys, renderLoanPeriods } from './views/admin.js';
+import { renderAudit, renderReports } from './views/insights.js';
+import { renderKits, renderWaitlist, renderRepairs, renderRepairDetail } from './views/workshop.js';
+
+/** Shared state every view can read. Never mutated by views directly. */
+export const session = {
+  user: null,
+  organization: null,
+  capabilities: [],
+  actorType: null,
+};
+
+export function can(capability) {
+  return session.capabilities.includes(capability);
+}
+
+const root = document.getElementById('app-root');
+let mainRegion = null;
+let navRegion = null;
+let pendingCounts = { requests: 0, overdue: 0, repairs: 0, ready: 0 };
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+const ROUTES = [
+  { path: 'dashboard',        title: 'Dashboard',        render: renderDashboard,     capability: null },
+  { path: 'scan',             title: 'Scan station',     render: renderScanStation,   capability: 'scan.use' },
+  { path: 'devices',          title: 'Devices',          render: renderDevices,       capability: 'devices.read' },
+  { path: 'devices/import',   title: 'Import devices',   render: renderImport,        capability: 'devices.import' },
+  { path: 'devices/:id',      title: 'Device',           render: renderDeviceDetail,  capability: 'devices.read' },
+  { path: 'loans',            title: 'Loans',            render: renderLoans,         capability: 'loans.read' },
+  { path: 'loans/:id',        title: 'Loan',             render: renderLoanDetail,    capability: 'loans.read' },
+  { path: 'kits',             title: 'Kits',             render: renderKits,          capability: 'devices.read' },
+  { path: 'waitlist',         title: 'Waitlist',         render: renderWaitlist,      capability: 'loans.read' },
+  { path: 'repairs',          title: 'Repairs',          render: renderRepairs,       capability: 'devices.read' },
+  { path: 'repairs/:id',      title: 'Repair',           render: renderRepairDetail,  capability: 'devices.read' },
+  { path: 'requests',         title: 'Requests',         render: renderRequests,      capability: 'requests.read' },
+  { path: 'requests/new',     title: 'New request',      render: renderNewRequest,    capability: 'requests.write' },
+  { path: 'requests/:id',     title: 'Request',          render: renderRequestDetail, capability: 'requests.read' },
+  { path: 'clients',          title: 'Clients',          render: renderClients,       capability: 'clients.read' },
+  { path: 'programs',         title: 'Programs',         render: renderPrograms,      capability: 'programs.read' },
+  { path: 'staff',            title: 'Staff',            render: renderStaff,         capability: 'users.read' },
+  { path: 'reports',          title: 'Reports',          render: renderReports,       capability: 'reports.read' },
+  { path: 'audit',            title: 'Audit log',        render: renderAudit,         capability: 'audit.read' },
+  { path: 'settings',         title: 'Settings',         render: renderSettings,      capability: 'settings.read' },
+  { path: 'settings/periods', title: 'Loan periods',     render: renderLoanPeriods,   capability: 'settings.write' },
+  { path: 'settings/api',     title: 'API keys',         render: renderApiKeys,       capability: 'apikeys.read' },
+];
+
+/** Navigation, grouped. Entries whose capability is missing are not rendered. */
+const NAV = [
+  {
+    label: null,
+    items: [
+      { path: 'dashboard', label: 'Dashboard', icon: '▤', capability: null },
+      { path: 'scan', label: 'Scan station', icon: '⌗', capability: 'scan.use' },
+    ],
+  },
+  {
+    label: 'Inventory',
+    items: [
+      { path: 'devices', label: 'Devices', icon: '▣', capability: 'devices.read' },
+      { path: 'loans', label: 'Loans', icon: '⇄', capability: 'loans.read', badge: 'overdue' },
+      { path: 'kits', label: 'Kits', icon: '⊞', capability: 'devices.read' },
+      { path: 'repairs', label: 'Repairs', icon: '⚒', capability: 'devices.read', badge: 'repairs' },
+    ],
+  },
+  {
+    label: 'Requests',
+    items: [
+      { path: 'requests', label: 'Loan requests', icon: '✉', capability: 'requests.read', badge: 'requests' },
+      { path: 'waitlist', label: 'Waitlist', icon: '◷', capability: 'loans.read', badge: 'ready' },
+    ],
+  },
+  {
+    label: 'People',
+    items: [
+      { path: 'clients', label: 'Clients', icon: '☺', capability: 'clients.read' },
+      { path: 'programs', label: 'Programs', icon: '◈', capability: 'programs.read' },
+      { path: 'staff', label: 'Staff', icon: '⚇', capability: 'users.read' },
+    ],
+  },
+  {
+    label: 'Insight',
+    items: [
+      { path: 'reports', label: 'Reports', icon: '◑', capability: 'reports.read' },
+      { path: 'audit', label: 'Audit log', icon: '☰', capability: 'audit.read' },
+    ],
+  },
+  {
+    label: 'Administration',
+    items: [
+      { path: 'settings', label: 'Settings', icon: '⚙', capability: 'settings.read' },
+      { path: 'settings/api', label: 'API keys', icon: '⚿', capability: 'apikeys.read' },
+    ],
+  },
+];
+
+/** Match a hash path against the route table, extracting :params. */
+function matchRoute(path) {
+  const segments = path.split('/').filter(Boolean);
+
+  for (const route of ROUTES) {
+    const routeSegments = route.path.split('/').filter(Boolean);
+    if (routeSegments.length !== segments.length) continue;
+
+    const params = {};
+    let matched = true;
+
+    for (let i = 0; i < routeSegments.length; i += 1) {
+      if (routeSegments[i].startsWith(':')) {
+        params[routeSegments[i].slice(1)] = decodeURIComponent(segments[i]);
+      } else if (routeSegments[i] !== segments[i]) {
+        matched = false;
+        break;
+      }
+    }
+
+    if (matched) return { route, params };
+  }
+
+  return null;
+}
+
+export function navigate(path) {
+  window.location.hash = `#/${String(path).replace(/^#?\/?/, '')}`;
+}
+
+/** A link that participates in routing. */
+export function routeLink(path, label, props = {}) {
+  return el('a', { href: `#/${String(path).replace(/^#?\/?/, '')}`, ...props }, label);
+}
+
+// ---------------------------------------------------------------------------
+// Shell rendering
+// ---------------------------------------------------------------------------
+
+function initials(name) {
+  return String(name || '?')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join('');
+}
+
+function buildShell() {
+  navRegion = el('nav', { class: 'app-nav', 'aria-label': 'Main' });
+  mainRegion = el('main', { class: 'app-main', id: 'main-content', tabindex: '-1' });
+
+  const shell = el('div', { class: 'app-shell' }, [
+    el('header', { class: 'app-header' }, [
+      el('a', { class: 'brand', href: '#/dashboard' }, [
+        el('span', { class: 'brand-mark', 'aria-hidden': 'true' }, [
+          svgIcon('M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z M3.27 6.96 12 12.01l8.73-5.05 M12 22.08V12'),
+        ]),
+        el('span', {}, [
+          'Loaner Pool',
+          el('span', { class: 'visually-hidden' }, ` — ${session.organization?.name || ''}`),
+        ]),
+      ]),
+
+      el('div', { class: 'header-actions' }, [
+        // SC 3.2.6 Consistent Help: this control is in the same place on
+        // every screen of the application.
+        el('button', {
+          type: 'button',
+          class: 'header-btn',
+          onClick: showHelp,
+        }, [el('span', { 'aria-hidden': 'true' }, '?'), el('span', {}, 'Help')]),
+
+        el('span', { class: 'user-chip' }, [
+          el('span', { class: 'avatar', 'aria-hidden': 'true', text: initials(session.user?.full_name) }),
+          el('span', { class: 'user-name' }, session.user?.full_name || ''),
+        ]),
+
+        el('button', {
+          type: 'button',
+          class: 'header-btn',
+          onClick: signOut,
+        }, [el('span', { 'aria-hidden': 'true' }, '⏻'), el('span', {}, 'Sign out')]),
+      ]),
+    ]),
+
+    el('div', { class: 'app-body' }, [navRegion, mainRegion]),
+  ]);
+
+  clear(root).append(shell);
+  renderNav();
+}
+
+function svgIcon(path) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('width', '17');
+  svg.setAttribute('height', '17');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+
+  for (const segment of path.split(' M').map((s, i) => (i === 0 ? s : `M${s}`))) {
+    const node = document.createElementNS(ns, 'path');
+    node.setAttribute('d', segment.trim());
+    svg.append(node);
+  }
+  return svg;
+}
+
+function renderNav() {
+  if (!navRegion) return;
+  const current = currentPath();
+
+  clear(navRegion);
+
+  for (const group of NAV) {
+    const visible = group.items.filter((item) => !item.capability || can(item.capability));
+    if (!visible.length) continue;
+
+    if (group.label) {
+      navRegion.append(el('p', { class: 'nav-group-label', text: group.label }));
+    }
+
+    navRegion.append(el('ul', {}, visible.map((item) => {
+      const isCurrent = current === item.path || current.startsWith(`${item.path}/`);
+      const count = item.badge ? pendingCounts[item.badge] : 0;
+
+      return el('li', {}, el('a', {
+        href: `#/${item.path}`,
+        'aria-current': isCurrent ? 'page' : null,
+      }, [
+        el('span', { class: 'nav-icon', 'aria-hidden': 'true', text: item.icon }),
+        el('span', {}, item.label),
+        count > 0
+          ? el('span', { class: 'badge-count' }, [
+              String(count),
+              el('span', { class: 'visually-hidden' }, ` ${item.badge === 'overdue' ? 'overdue' : 'awaiting attention'}`),
+            ])
+          : null,
+      ]));
+    })));
+  }
+}
+
+function currentPath() {
+  return window.location.hash.replace(/^#\/?/, '') || 'dashboard';
+}
+
+/** Refresh the counts shown as nav badges. Failure here is not worth surfacing. */
+async function refreshBadges() {
+  if (!can('reports.read')) return;
+  try {
+    // Counts are fetched together and failures are tolerated individually, so
+    // one slow endpoint does not blank every badge.
+    const [summary, repairs, waitlist] = await Promise.all([
+      api.summary(),
+      can('devices.read') ? api.repairs({ open: true, per_page: 1 }).catch(() => null) : null,
+      can('loans.read') ? api.reservations({ status: 'ready', per_page: 1 }).catch(() => null) : null,
+    ]);
+
+    pendingCounts = {
+      requests: summary.requests.awaiting_review || 0,
+      overdue: summary.loans.overdue || 0,
+      repairs: repairs?.meta?.total || 0,
+      ready: waitlist?.meta?.total || 0,
+    };
+    renderNav();
+  } catch {
+    // Badge counts are decoration; a failure must not interrupt the user.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Routing
+// ---------------------------------------------------------------------------
+
+let renderToken = 0;
+
+async function handleRoute() {
+  if (!session.user && session.actorType !== 'user') return;
+
+  const path = currentPath();
+  const matched = matchRoute(path);
+  const token = ++renderToken;
+
+  if (!matched) {
+    clear(mainRegion).append(
+      el('div', { class: 'card' }, [
+        el('h1', { text: 'Page not found' }),
+        el('p', { text: `There is no screen at "${path}".` }),
+        el('a', { class: 'btn btn-primary', href: '#/dashboard' }, 'Back to the dashboard'),
+      ]),
+    );
+    document.title = 'Not found — Loaner Pool';
+    focusHeading(mainRegion);
+    return;
+  }
+
+  const { route, params } = matched;
+
+  if (route.capability && !can(route.capability)) {
+    clear(mainRegion).append(
+      el('div', { class: 'card' }, [
+        el('h1', { text: 'You do not have access to this' }),
+        el('p', {
+          text:
+            `Your account (${session.user?.role_label || 'this role'}) cannot open the ` +
+            `${route.title} screen. If you need it, ask an administrator.`,
+        }),
+        el('a', { class: 'btn btn-primary', href: '#/dashboard' }, 'Back to the dashboard'),
+      ]),
+    );
+    document.title = 'No access — Loaner Pool';
+    focusHeading(mainRegion);
+    return;
+  }
+
+  document.title = `${route.title} — Loaner Pool`;
+  renderNav();
+  clear(mainRegion).append(loadingBlock(`Loading ${route.title.toLowerCase()}…`));
+
+  try {
+    const content = await route.render({ params, navigate, session });
+    // A slower earlier route must not overwrite a newer one.
+    if (token !== renderToken) return;
+
+    clear(mainRegion).append(content);
+    focusHeading(mainRegion);
+    announce(`${route.title} loaded.`);
+  } catch (err) {
+    if (token !== renderToken) return;
+
+    clear(mainRegion).append(
+      el('div', { class: 'card' }, [
+        el('h1', { text: `Could not load ${route.title.toLowerCase()}` }),
+        alertBox(
+          err instanceof ApiError ? err.message : `Unexpected error: ${err.message}`,
+          { type: 'danger' },
+        ),
+        el('button', {
+          type: 'button', class: 'btn btn-primary', onClick: () => handleRoute(),
+        }, 'Try again'),
+      ]),
+    );
+    focusHeading(mainRegion);
+  }
+
+  refreshBadges();
+}
+
+// ---------------------------------------------------------------------------
+// Help
+// ---------------------------------------------------------------------------
+
+function showHelp() {
+  modal({
+    title: 'Help',
+    wide: false,
+    body: el('div', { class: 'stack' }, [
+      el('h3', { text: 'Scanning' }),
+      el('p', {
+        text:
+          'On the Scan station screen, a USB or Bluetooth barcode scanner works with no setup — ' +
+          'it types the code and presses Enter. You can also use the camera on this device, ' +
+          'pair a phone as a remote scanner, or type the code by hand.',
+      }),
+      el('h3', { text: 'If a device has no label' }),
+      el('p', {
+        text:
+          'Search for it on the Devices screen and use the check-out or check-in button there. ' +
+          'Everything a scanner can do can also be done by hand.',
+      }),
+      el('h3', { text: 'Keyboard shortcuts' }),
+      el('ul', {}, [
+        el('li', { text: 'Tab and Shift+Tab move between controls.' }),
+        el('li', { text: 'Escape closes any dialog.' }),
+        el('li', { text: 'The "Skip to main content" link appears when you first press Tab.' }),
+      ]),
+      el('h3', { text: 'Who to contact' }),
+      el('p', {
+        text: session.organization?.contact_email
+          ? `For anything this screen cannot answer, contact ${session.organization.contact_email}.`
+          : 'Contact your Loaner Pool administrator for anything this screen cannot answer.',
+      }),
+    ]),
+    actions: [{ label: 'Close', class: 'btn-primary', value: null }],
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Sign in
+// ---------------------------------------------------------------------------
+
+function renderSignIn({ message = null } = {}) {
+  const emailField = field({
+    name: 'email', label: 'Email address', type: 'email', required: true,
+    // SC 1.3.5 / 3.3.8 — lets a password manager identify and fill the form.
+    autocomplete: 'username',
+  });
+  const passwordField = field({
+    name: 'password', label: 'Password', type: 'password', required: true,
+    autocomplete: 'current-password',
+  });
+
+  const errorRegion = el('div', { role: 'alert' });
+  const submitButton = el('button', { type: 'submit', class: 'btn btn-primary btn-block btn-lg' }, 'Sign in');
+
+  const form = el('form', {
+    novalidate: true,
+    onSubmit: async (event) => {
+      event.preventDefault();
+      clear(errorRegion);
+      emailField.setError(null);
+      passwordField.setError(null);
+
+      const email = emailField.control.value.trim();
+      const password = passwordField.control.value;
+
+      if (!email) { emailField.setError('Enter your email address.'); emailField.control.focus(); return; }
+      if (!password) { passwordField.setError('Enter your password.'); passwordField.control.focus(); return; }
+
+      await withBusy(submitButton, 'Signing in…', async () => {
+        try {
+          const result = await api.login(email, password);
+          session.user = result.user;
+          session.organization = result.organization;
+          session.capabilities = result.capabilities;
+          session.actorType = 'user';
+
+          announce(`Signed in as ${result.user.full_name}.`);
+          start();
+
+          if (result.must_change_password) promptPasswordChange();
+        } catch (err) {
+          const message = err instanceof ApiError ? err.message : 'Could not sign in.';
+          errorRegion.append(alertBox(message, { type: 'danger', title: 'Sign-in failed' }));
+          announce(`Sign-in failed. ${message}`, { assertive: true });
+          passwordField.control.value = '';
+          passwordField.control.focus();
+        }
+      });
+    },
+  }, [
+    emailField,
+    passwordField,
+    submitButton,
+    el('p', { style: { textAlign: 'center', marginTop: '14px', marginBottom: 0 } }, [
+      el('button', {
+        type: 'button',
+        class: 'btn btn-ghost btn-sm',
+        onClick: () => openForgotPasswordDialog(emailField.control.value.trim()),
+      }, 'I have forgotten my password'),
+    ]),
+  ]);
+
+  clear(root).append(el('div', { class: 'centred-page' }, [
+    el('div', { class: 'centred-card' }, [
+      el('div', { class: 'brand-block' }, [
+        el('span', { class: 'brand-mark-lg', 'aria-hidden': 'true' }, [
+          svgIcon('M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z M3.27 6.96 12 12.01l8.73-5.05 M12 22.08V12'),
+        ]),
+        el('h1', { text: 'Loaner Pool' }),
+        el('p', { text: 'Sign in to manage devices, loans and requests.' }),
+      ]),
+      el('div', { class: 'card' }, [
+        message ? alertBox(message, { type: 'info' }) : null,
+        errorRegion,
+        form,
+      ]),
+    ]),
+  ]));
+
+  emailField.control.focus();
+}
+
+/**
+ * Ask for a reset link.
+ *
+ * The response is identical whether or not the address exists, so this dialog
+ * says the same thing either way — anything else would let someone work out
+ * who has an account.
+ */
+function openForgotPasswordDialog(prefill = '') {
+  const emailField = field({
+    name: 'email', label: 'Your email address', type: 'email', required: true,
+    value: prefill, autocomplete: 'username',
+  });
+
+  return modal({
+    title: 'Reset your password',
+    body: el('div', {}, [
+      el('p', {
+        text:
+          'Enter the address you sign in with. If it belongs to an account, we will email a link ' +
+          'that lets you choose a new password. The link works once and expires in an hour.',
+      }),
+      emailField,
+    ]),
+    actions: [
+      { label: 'Cancel', class: 'btn-ghost', value: null },
+      {
+        label: 'Send the link',
+        class: 'btn-primary',
+        onClick: async (close) => {
+          emailField.setError(null);
+          const email = emailField.control.value.trim();
+          if (!email) {
+            emailField.setError('Enter your email address.');
+            emailField.control.focus();
+            return;
+          }
+
+          try {
+            const result = await api.forgotPassword(email);
+            close(true);
+            toastOk(result.message, 'Check your inbox');
+            if (result.admin_warning) toastWarn(result.admin_warning, 'Email not configured');
+          } catch (err) {
+            emailField.setError(err.message);
+            emailField.control.focus();
+          }
+        },
+      },
+    ],
+  });
+}
+
+/**
+ * The screen someone lands on from the emailed link.
+ * Reached at #/reset?token=… before any session exists.
+ */
+function renderResetPassword(token) {
+  const newField = field({
+    name: 'new_password', label: 'New password', type: 'password', required: true,
+    help: 'At least 12 characters, with at least one number or symbol.',
+    autocomplete: 'new-password',
+  });
+  const confirmField = field({
+    name: 'confirm_password', label: 'Confirm new password', type: 'password',
+    required: true, autocomplete: 'new-password',
+  });
+
+  const errorRegion = el('div', { role: 'alert' });
+  const submitButton = el('button', { type: 'submit', class: 'btn btn-primary btn-block btn-lg' }, 'Set my password');
+
+  const form = el('form', {
+    novalidate: true,
+    onSubmit: async (event) => {
+      event.preventDefault();
+      clear(errorRegion);
+      newField.setError(null);
+      confirmField.setError(null);
+
+      if (newField.control.value !== confirmField.control.value) {
+        confirmField.setError('The two passwords do not match.');
+        confirmField.control.focus();
+        return;
+      }
+
+      await withBusy(submitButton, 'Saving…', async () => {
+        try {
+          const result = await api.resetPassword({
+            token,
+            new_password: newField.control.value,
+            confirm_password: confirmField.control.value,
+          });
+          window.location.hash = '';
+          renderSignIn({ message: result.message });
+        } catch (err) {
+          const target = err.field === 'token' ? null : newField;
+          if (target) {
+            target.setError(err.message);
+            target.control.focus();
+          } else {
+            errorRegion.append(alertBox(err.message, { type: 'danger', title: 'That link did not work' }));
+          }
+        }
+      });
+    },
+  }, [newField, confirmField, submitButton]);
+
+  clear(root).append(el('div', { class: 'centred-page' }, [
+    el('div', { class: 'centred-card' }, [
+      el('div', { class: 'brand-block' }, [
+        el('h1', { text: 'Choose a new password' }),
+        el('p', { text: 'Once you save this, you will be signed out everywhere else.' }),
+      ]),
+      el('div', { class: 'card' }, [errorRegion, form]),
+    ]),
+  ]));
+
+  newField.control.focus();
+}
+
+function promptPasswordChange() {
+  const currentField = field({
+    name: 'current_password', label: 'Current password', type: 'password',
+    required: true, autocomplete: 'current-password',
+  });
+  const newField = field({
+    name: 'new_password', label: 'New password', type: 'password', required: true,
+    help: 'At least 12 characters, with at least one number or symbol.',
+    autocomplete: 'new-password',
+  });
+  const confirmField = field({
+    name: 'confirm_password', label: 'Confirm new password', type: 'password',
+    required: true, autocomplete: 'new-password',
+  });
+
+  modal({
+    title: 'Choose a new password',
+    body: el('div', {}, [
+      el('p', {
+        text:
+          'Your password was set by an administrator, so they know it. ' +
+          'Choose one only you know before you carry on.',
+      }),
+      currentField, newField, confirmField,
+    ]),
+    actions: [
+      { label: 'Later', class: 'btn-ghost', value: null },
+      {
+        label: 'Change password',
+        class: 'btn-primary',
+        onClick: async (close) => {
+          for (const f of [currentField, newField, confirmField]) f.setError(null);
+
+          if (newField.control.value !== confirmField.control.value) {
+            confirmField.setError('The two passwords do not match.');
+            confirmField.control.focus();
+            return;
+          }
+
+          try {
+            await api.changePassword({
+              current_password: currentField.control.value,
+              new_password: newField.control.value,
+              confirm_password: confirmField.control.value,
+            });
+            toastOk('Your password has been changed and all other sessions were signed out.');
+            close(true);
+          } catch (err) {
+            const target = err.field === 'current_password' ? currentField : newField;
+            target.setError(err.message);
+            target.control.focus();
+          }
+        },
+      },
+    ],
+  });
+}
+
+async function signOut() {
+  const confirmed = await confirmDialog({
+    title: 'Sign out?',
+    message: 'You will need to sign in again to use Loaner Pool.',
+    confirmLabel: 'Sign out',
+  });
+  if (!confirmed) return;
+
+  try {
+    await api.logout();
+  } catch {
+    // Even if the server call fails, clear local state — the user asked to leave.
+  }
+
+  session.user = null;
+  session.capabilities = [];
+  session.actorType = null;
+  window.location.hash = '';
+  renderSignIn({ message: 'You have been signed out.' });
+}
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+
+function start() {
+  buildShell();
+  if (!window.location.hash || window.location.hash === '#') {
+    window.location.hash = '#/dashboard';
+  }
+  handleRoute();
+  refreshBadges();
+}
+
+onSessionExpired(() => {
+  if (!session.user) return;
+  session.user = null;
+  session.capabilities = [];
+  renderSignIn({ message: 'Your session has expired. Please sign in again.' });
+});
+
+window.addEventListener('hashchange', handleRoute);
+
+/** A reset link is followed before any session exists, so check for it first. */
+function resetTokenFromHash() {
+  const hash = window.location.hash.replace(/^#\/?/, '');
+  if (!hash.startsWith('reset')) return null;
+  return new URLSearchParams(hash.split('?')[1] || '').get('token');
+}
+
+async function boot() {
+  const resetToken = resetTokenFromHash();
+  if (resetToken) {
+    renderResetPassword(resetToken);
+    return;
+  }
+
+  try {
+    const me = await api.me();
+    session.user = me.user;
+    session.organization = me.organization;
+    session.capabilities = me.capabilities;
+    session.actorType = me.actor_type;
+    start();
+    if (me.must_change_password) promptPasswordChange();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) {
+      renderSignIn();
+      return;
+    }
+    if (err instanceof ApiError && err.code === 'not_installed') {
+      window.location.href = '/install.html';
+      return;
+    }
+
+    clear(root).append(el('div', { class: 'centred-page' }, [
+      el('div', { class: 'centred-card' }, [
+        el('div', { class: 'card' }, [
+          el('h1', { text: 'Loaner Pool could not start' }),
+          alertBox(err.message, { type: 'danger' }),
+          el('button', {
+            type: 'button', class: 'btn btn-primary', onClick: () => window.location.reload(),
+          }, 'Reload'),
+        ]),
+      ]),
+    ]));
+  }
+}
+
+boot();
