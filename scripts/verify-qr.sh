@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 #
-# Runs the QR round-trip check. Copies the harness into the document root for
-# the duration, then removes it — it is a test, not part of the application,
-# and must never be left reachable on a deployed site.
+# QR round-trip check: encode with PHP, decode with an independent library.
+#
+# Fully headless — no browser and no server. The encoder prints its matrices as
+# JSON and Node decodes them with the vendored jsQR, so this runs in CI.
+#
+# Node is used here and nowhere else in the project, and only as a test
+# harness. If Node is not installed, scripts/qr-roundtrip.php does the same
+# check in a browser instead.
+#
+# Usage: scripts/verify-qr.sh
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-cp scripts/qr-roundtrip.php public/qr-roundtrip.php
-trap 'rm -f public/qr-roundtrip.php' EXIT
+if ! command -v node > /dev/null 2>&1; then
+  echo "Node is not installed, so the independent decoder cannot run." >&2
+  echo "Serve the app and open /qr-roundtrip.php in a browser instead." >&2
+  exit 1
+fi
 
-echo "Serving at http://127.0.0.1:8080/qr-roundtrip.php"
-echo "Open it in a browser; the title reads QR OK or QR FAIL."
-php -S 127.0.0.1:8080 -t public scripts/dev-router.php
+php scripts/qr-matrices.php | node scripts/qr-decode.mjs

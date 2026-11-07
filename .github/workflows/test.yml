@@ -4,31 +4,32 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Lets a maintainer re-run the suite without pushing, e.g. to check that a
-  # dependency update outside this repo has not broken anything.
+  # Lets a maintainer re-run the suite without pushing, e.g. to confirm a
+  # change in the hosting environment has not broken anything.
   workflow_dispatch:
 
 jobs:
   test:
-    name: Node ${{ matrix.node }} / ${{ matrix.db.name }}
+    name: PHP ${{ matrix.php }} / ${{ matrix.db.name }}
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        node: ['18', '20', '22']
+        php: ['8.0', '8.2', '8.4']
         db:
           # The schema is written to work on both engines, and the differences
-          # between them (CHECK constraints, JSON types, ADD COLUMN IF NOT
-          # EXISTS) are exactly the ones that break silently. Test both.
+          # between them (CHECK constraints, ADD COLUMN IF NOT EXISTS, strict
+          # GROUP BY) are exactly the ones that break silently. Test both.
           - name: MariaDB 10.6
             image: mariadb:10.6
           - name: MySQL 8.0
             image: mysql:8.0
         exclude:
-          # One engine per Node version is enough for the middle of the matrix;
-          # the oldest and newest supported Node get both.
-          - node: '20'
+          # One engine per version is enough through the middle of the matrix;
+          # the oldest and newest supported PHP get both. 8.0 is the floor
+          # because the code uses match(), named arguments and union types.
+          - php: '8.2'
             db: { name: MySQL 8.0, image: 'mysql:8.0' }
 
     services:
@@ -54,14 +55,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
         with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
+          php-version: ${{ matrix.php }}
+          # Exactly what app/bootstrap.php checks for at run time. There is no
+          # Composer in this project: these are the only dependencies.
+          extensions: pdo, pdo_mysql, mbstring, json, openssl
+          coverage: none
 
       - name: Wait for the database
         run: |
@@ -87,7 +88,7 @@ jobs:
         # Runs standalone, with no database. The Code 128 and Code 39 tables
         # are hand-transcribed, and a single mistyped digit produces a label
         # that renders perfectly and scans as the wrong value.
-        run: node scripts/verify-barcode.js
+        run: php scripts/verify-barcode.php
 
       - name: Run the full suite
         env:
@@ -106,26 +107,60 @@ jobs:
           echo "--- server log ---"
           cat /tmp/loaner-test-server.log || echo "(no log)"
 
+  qr:
+    name: QR round-trip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, json
+          coverage: none
+
+      # The only place Node appears in this project: the QR encoder is checked
+      # by decoding its own output with an independent library. An encoder
+      # verified only against itself is verified against nothing — this caught
+      # a transposed Reed-Solomon generator polynomial that produced symbols
+      # which looked perfect and decoded on no reader at all.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Decode generated symbols with jsQR
+        run: ./scripts/verify-qr.sh
+
   lint:
     name: Syntax check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.0'
+          coverage: none
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Parse every source file
-        # There is no bundler or transpiler in this project, so the files that
-        # ship are the files that run. A syntax error reaches production as a
-        # blank page, which this catches in seconds.
+      - name: Parse every PHP file
+        # There is no build step, so the files that ship are the files that
+        # run. Checked against the lowest supported version, because a syntax
+        # feature added in 8.1 parses fine locally and fails on the host.
+        run: |
+          failed=0
+          while IFS= read -r file; do
+            php -l "$file" > /dev/null || { echo "FAILED: $file"; failed=1; }
+          done < <(find app public scripts bin -name '*.php')
+          exit $failed
+
+      - name: Parse every JavaScript file
         run: |
           failed=0
           while IFS= read -r file; do
             node --check "$file" || { echo "FAILED: $file"; failed=1; }
-          done < <(find src public scripts -name '*.js' ! -path '*/vendor/*')
+          done < <(find public scripts -name '*.js' ! -path '*/vendor/*')
           exit $failed
-
-      - name: Validate the OpenAPI document
-        run: node -e "JSON.parse(require('fs').readFileSync('docs/openapi.json','utf8')); console.log('openapi.json parses')"

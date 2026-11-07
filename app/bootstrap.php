@@ -13,8 +13,17 @@ declare(strict_types=1);
 
 namespace Loaner;
 
-const APP_VERSION    = '2.0.0';
-const SCHEMA_VERSION = 1;
+const APP_VERSION = '2.0.0';
+
+/**
+ * The version that schema.sql alone produces.
+ *
+ * Migrations take the database from here up to Migrations::TARGET_VERSION. The
+ * two are deliberately separate: a fresh install runs schema.sql and then the
+ * same migrations an existing install runs, so there is only ever one code path
+ * that creates the later tables.
+ */
+const BASE_SCHEMA_VERSION = 1;
 
 /** Project root — one level above this file. */
 define('Loaner\\APP_ROOT', dirname(__DIR__));

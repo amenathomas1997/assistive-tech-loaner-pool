@@ -6,15 +6,20 @@ process on spreadsheets.
 
 ## Getting it running
 
-You need Node.js 18+ and MySQL 5.7+ or MariaDB 10.2+.
+You need **PHP 8.0+** (with `pdo_mysql`, `mbstring`, `json` and `openssl`) and
+**MySQL 5.7+** or **MariaDB 10.2+**. Nothing else — there is no Composer step
+and no package manager.
 
 ```bash
-npm install
-npm start
+php -S 127.0.0.1:8080 -t public scripts/dev-router.php
 ```
 
-Then open `http://localhost:3000/` and work through the installer. It creates
+Then open `http://127.0.0.1:8080/` and work through the installer. It creates
 the schema and your first administrator; nothing needs to be edited by hand.
+
+The router script mirrors what `public/.htaccess` does under Apache. Running
+`php -S` without it will appear to work and then fail on static files, so use
+the script.
 
 To run the test suite you need a database the tests can drop and recreate:
 
@@ -36,9 +41,24 @@ database with real data in it — it drops the schema on every run.**
 ```
 
 This drops and recreates the test database, runs the installer through its own
-API, then exercises the application end to end — 223 checks. It should finish
+API, then exercises the application end to end — 229 checks. It should finish
 green. If you have changed behaviour on purpose, change the assertion in the
 same commit so the diff shows what moved.
+
+The QR encoder is checked separately, because it is the one piece that cannot
+be verified against itself:
+
+```bash
+./scripts/verify-qr.sh
+```
+
+This encodes with PHP and decodes with a vendored copy of jsQR. It needs Node,
+and that is the only thing in the project that does — purely as a test harness.
+It exists because an earlier version of the encoder had two terms of the
+Reed–Solomon generator polynomial transposed: every structural check passed,
+the symbol read back to its own codewords, and all 77 symbols were undecodable
+by any real reader. A reimplementation by the same author reproduced the
+identical bug. If you touch `app/Qr.php`, run this.
 
 There is no build step, no bundler and no transpiler. What is in the repository
 is what runs. Please keep it that way: the target is shared hosting where the
@@ -48,8 +68,13 @@ deployment story is "upload the files".
 
 - **No runtime dependencies in the browser.** No framework, no CDN. The app
   must work on a locked-down network with no outbound access.
-- **Server dependencies stay minimal.** Five at the time of writing. Adding one
-  needs a reason better than convenience.
+- **No server dependencies at all.** No Composer, no autoloader to generate,
+  nothing to install. The application uses only PHP's own standard extensions.
+  A pull request that adds a dependency needs a reason better than convenience,
+  because on the hosting this targets "run `composer install`" is often not
+  something the administrator can do.
+- **One class per file**, named to match: `Loaner\Foo\Bar` lives at
+  `app/Foo/Bar.php`. The autoloader in `app/bootstrap.php` depends on it.
 - **Comment the "why", not the "what".** The code says what it does. Comments
   earn their place by explaining a decision that is not obvious — why
   check-out takes a row lock, why overdue is derived rather than stored, why
@@ -85,9 +110,17 @@ the PR. Most problems surface in the first thirty seconds.
   that with a status check.
 - **The audit log is append-only.** Do not add an `UPDATE` or `DELETE` against
   `audit_log`, whatever the reason seems to be.
-- **Schema changes go in `src/migrations.js`**, never into `schema.sql`, which
-  describes version 1 and is only run by the installer. Migrations must be
-  safe to re-run, because an interrupted upgrade resumes on the next restart.
+- **Schema changes go in `app/Migrations.php`**, never into `schema.sql`, which
+  describes version 1 and is only run by the installer. Bump `TARGET_VERSION`
+  and add a step. Each step must be safe to re-run: MySQL commits implicitly on
+  DDL, so a migration cannot be made atomic with a transaction, and an upgrade
+  interrupted halfway must resume cleanly on the next request.
+- **Routes are matched by specificity, not registration order.** You can add
+  `/devices/export.csv` next to `/devices/{id}` and it will work. Do not
+  "fix" the router to match in order.
+- **Nothing schedules itself.** Reminders run from cron via `bin/run-jobs.php`
+  or the HTTP job runner. A PHP request ends when the response is sent, so an
+  in-process timer would only fire while someone was already using the app.
 - **Offline queues returns, never check-outs.** A check-out needs to know the
   device is free *now*.
 

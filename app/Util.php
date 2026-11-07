@@ -51,6 +51,34 @@ final class Util
     // those must not become real values in the database.
     // -----------------------------------------------------------------------
 
+    /**
+     * A string that must fit, or a 400 saying so.
+     *
+     * `str()` truncates, which is right for free text where losing the tail of
+     * a note is better than refusing the whole form. It is wrong for anything
+     * matched or printed: an asset tag silently cut to 64 characters no longer
+     * matches the label on the device, and the spreadsheet importer matches on
+     * asset tags, so the next import creates a duplicate instead of updating
+     * the device. Identifiers go through here.
+     */
+    public static function boundedStr(mixed $value, string $field, int $max): ?string
+    {
+        $s = self::str($value, PHP_INT_MAX);
+
+        if ($s !== null && mb_strlen($s) > $max) {
+            throw self::badRequest(
+                sprintf(
+                    '"%s" is %d characters, and the limit is %d. Shorten it rather than letting it be '
+                    . 'cut off, so it still matches what is printed on the device.',
+                    $field, mb_strlen($s), $max,
+                ),
+                ['field' => $field, 'max_length' => $max, 'length' => mb_strlen($s)],
+            );
+        }
+
+        return $s;
+    }
+
     public static function str(mixed $value, int $max = 65535, bool $trim = true): ?string
     {
         if ($value === null || is_array($value) || is_object($value)) {
@@ -215,7 +243,30 @@ final class Util
         $requested = (int) ($query['per_page'] ?? self::DEFAULT_PAGE_SIZE);
         $perPage  = min(self::MAX_PAGE_SIZE, max(1, $requested ?: self::DEFAULT_PAGE_SIZE));
 
-        return ['page' => $page, 'perPage' => $perPage, 'offset' => ($page - 1) * $perPage];
+        // "limit" is the same number under the name the query builders use, so
+        // a route can pass this array straight through without restating it.
+        return [
+            'page'    => $page,
+            'perPage' => $perPage,
+            'limit'   => $perPage,
+            'offset'  => ($page - 1) * $perPage,
+        ];
+    }
+
+    /**
+     * A list that is not paginated, in the same envelope as one that is.
+     *
+     * Every collection this API returns looks the same from the outside:
+     * `{data: [...], meta: {...}}`. A client should not have to remember which
+     * endpoints happen to paginate, and adding pagination to one later must not
+     * be a breaking change.
+     */
+    public static function collection(array $items, array $extraMeta = []): array
+    {
+        return [
+            'data' => $items,
+            'meta' => ['total' => count($items)] + $extraMeta,
+        ];
     }
 
     public static function paged(array $items, int $total, array $pagination): array

@@ -409,10 +409,12 @@ final class Barcode
             </head>
             <body>
               <div class="toolbar">
-                <button type="button" onclick="window.print()">Print {$count} label{$plural}</button>
+                <button type="button" data-print hidden>Print {$count} label{$plural}</button>
+                <noscript>Use your browser's own Print command to print this sheet.</noscript>
                 <span> &nbsp; Symbology: {$symbology} &nbsp;|&nbsp; Label size: {$labelWidth} &times; {$labelHeight} mm</span>
               </div>
               <div class="sheet">{$labels}</div>
+              <script src="/js/print-sheet.js"></script>
             </body>
             </html>
             HTML;

@@ -4,7 +4,9 @@ This guide covers cPanel shared hosting, because that is the most constrained
 target. Nothing here is specific to one host or one account name — the database
 name, user and subdomain are all whatever you choose.
 
-There is no build step. The application runs the files as they are.
+There is no build step, no Composer and no package manager. The application
+runs the files as they are: upload them, point a subdomain at `public/`, and
+open it in a browser.
 
 ---
 
@@ -12,13 +14,16 @@ There is no build step. The application runs the files as they are.
 
 | Requirement | Notes |
 |---|---|
-| Node.js 18 or newer | cPanel ships this under **Setup Node.js App**. |
+| PHP 8.0 or newer | With `pdo_mysql`, `mbstring`, `json` and `openssl`. All four are standard on shared hosting; the app checks on first request and names any that are missing. |
+| Apache with `mod_rewrite` | The default on cPanel. `.htaccess` is already in the right place. |
 | MySQL 5.7+ or MariaDB 10.2+ | An empty database and a user with `ALL PRIVILEGES` on it. |
 | A subdomain or domain | For example `loanerpool.example.com`. |
 | HTTPS | Strongly recommended, and **required** for phone-camera scanning. Browsers block camera access on plain HTTP. |
 
-You do **not** need shell access, and the installer never needs permission to
-`CREATE DATABASE` — you create the database yourself in the control panel.
+You do **not** need shell access, Composer, a package manager or a deploy
+step. The installer never needs permission to `CREATE DATABASE` either — you
+create the database yourself in the control panel, which is all that most
+managed MySQL users are allowed to do.
 
 ---
 
@@ -54,38 +59,53 @@ In cPanel → **MySQL® Databases**:
 
 ## 3. Upload the application
 
-Upload the project to the document root from step 1, so that `app.js` and
-`package.json` sit directly in it.
+The important part of this step is **which directory becomes the document
+root**, because only `public/` should be web-reachable.
 
-**Do not upload `node_modules`.** cPanel installs dependencies for you in the
-next step, and an uploaded `node_modules` from a different platform will
-contain the wrong binaries.
+Upload the whole project to the account, *beside* the document root rather than
+into it — for example to `/home/<account>/loanerpool-src/` — then point the
+subdomain's document root at `/home/<account>/loanerpool-src/public`.
 
-Also skip `data/` — it is created on first run and holds your credentials.
+cPanel → **Domains** → your subdomain → **Document Root**, and set it to the
+`public` directory.
+
+That one setting is what keeps `data/config.json` — which holds your database
+password and the key that encrypts stored secrets — outside anything the web
+server will serve.
+
+If your host will not let you change the document root, upload the project
+into the document root as-is. `public/.htaccess` and the front controller still
+work, and `data/` is protected by its own rules, but the separate document root
+is the stronger arrangement and worth asking for.
+
+Skip `data/` when uploading: it is created on first run and holds your
+credentials.
 
 Via File Manager: zip the project locally, upload the zip, then **Extract**.
 
 ---
 
-## 4. Register the Node.js application
+## 4. Check that rewriting works
 
-cPanel → **Setup Node.js App** → **Create Application**:
+Open `https://loanerpool.example.com/health` in a browser. You should get JSON:
 
-| Field | Value |
-|---|---|
-| Node.js version | 18 or newer |
-| Application mode | Production |
-| Application root | the document root from step 1 |
-| Application URL | your subdomain |
-| Application startup file | `app.js` |
+```json
+{"ok":true,"app_version":"2.0.0","installed":false,"php_version":"8.2.x", ...}
+```
 
-Click **Create**, then **Run NPM Install** on the same screen. That reads
-`package.json` and installs the five runtime dependencies.
+That single response proves four things at once: PHP is executing, the
+rewrite rules are being applied, the required extensions are present, and the
+application knows it has not been installed yet.
 
-Finally click **Restart**.
+If you get a directory listing or a 404, `mod_rewrite` is not picking up
+`.htaccess`. On cPanel this is almost always a document root pointing one level
+too high — recheck step 3.
 
-Passenger supplies the listening port through the `PORT` environment variable,
-which `src/config.js` already reads. There is nothing to configure.
+If you get a PHP error naming a missing extension, install or enable it in
+cPanel → **Select PHP Version** → **Extensions**.
+
+There is nothing to register and no process to restart. PHP runs per request;
+once the files are in place and `/health` answers, the application is running.
 
 ---
 
@@ -96,7 +116,8 @@ file exists yet, every request redirects to the setup wizard.
 
 Work through the six steps:
 
-1. **Welcome** — confirms the Node version and whether you are on HTTPS.
+1. **Welcome** — confirms the PHP version, the required extensions, whether
+   the configuration directory is writable, and whether you are on HTTPS.
 2. **Database** — enter host `localhost`, port `3306`, and the **full** database
    name and username from step 2. Press **Test connection**; it reports
    separately whether the server was reachable, the credentials were accepted,
@@ -122,16 +143,18 @@ the encryption key used for stored secrets. The application writes it mode
 curl -I https://loanerpool.example.com/data/config.json
 ```
 
-You should get **404**. The application only serves files from `public/`, so
-`data/` is not exposed — but if your host serves the application root
-statically for any reason, move the file above the web root and point the app
-at it:
+You should get **404**. With the document root set to `public/` as in step 3,
+`data/` is not under the web server at all and cannot be served. If you had to
+upload into the document root instead, verify that URL specifically — and if it
+returns the file, move the configuration elsewhere and tell the application
+where it went:
 
-```
-LOANER_CONFIG=/home/<account>/loaner-config.json
+```apache
+# In public/.htaccess, or the subdomain's PHP settings
+SetEnv LOANER_CONFIG /home/<account>/loaner-config.json
 ```
 
-Set that in **Setup Node.js App → Environment variables**, then restart.
+Then move `data/config.json` to that path. Nothing needs restarting.
 
 Back this file up. Losing it means re-running the installer; losing the
 `appKey` inside it means any stored Graph client secret must be re-entered.
@@ -193,21 +216,32 @@ told?" always has an answer.
 These are the only emails sent on a schedule rather than in response to
 something happening, and they are the ones people notice when they stop.
 
-The application runs its own hourly scheduler by default. It only sends
-between **07:00 and 19:00** local time, so an overdue notice never lands at
-three in the morning, and it records every run — **Settings → Due-soon and
-overdue reminders** shows whether the job is healthy and lets you run it by
-hand.
+**Nothing schedules itself.** A PHP request ends the moment the response is
+sent, so there is nowhere inside the application for a timer to live. An
+in-process scheduler would only ever fire while somebody happened to be using
+the app, which is precisely when an overdue reminder is not needed.
 
-On most cPanel accounts the built-in scheduler is enough. Use an external cron
-entry instead if your host idles the application out between requests, or if
-you want the timing to be exact:
+So these reminders require a cron entry, and until you add one **no reminder
+will ever be sent**. The application says so plainly: **Settings → Scheduled
+jobs** shows a warning until it has seen a real cron run, and tells you how
+long ago the last one was.
 
-1. Turn the built-in one off by adding the environment variable
-   `LOANER_DISABLE_SCHEDULER=1` in **Setup Node.js App**, then restart.
-2. In **Settings → Due-soon and overdue reminders**, press **Show the cron
-   command** and copy the line it gives you.
-3. Paste it into cPanel → **Cron Jobs**.
+To set it up:
+
+1. **Settings → Scheduled jobs** → copy the command it shows you.
+2. Paste it into cPanel → **Cron Jobs**, set to **Once Per Day**.
+
+Two forms are offered and either works:
+
+- **The command line** — preferred when cron runs on the same host. It needs no
+  network, no token, and keeps working even if the site is briefly unreachable
+  from outside.
+- **A `curl` request** — for when cron runs somewhere else. It carries a secret
+  in an `X-Cron-Token` header rather than the URL, because query strings end up
+  in access logs, proxy logs and browser history.
+
+Run it once a day. Seven in the morning means notices are waiting for people
+when they start work.
 
 It looks like this:
 
@@ -244,7 +278,9 @@ Two consequences worth planning for:
 
 1. Back up `data/config.json`, `data/uploads/`, and take a database dump.
 2. Upload the new files over the old ones, leaving `data/` alone.
-3. **Run NPM Install**, then **Restart** in Setup Node.js App.
+3. Run the migrations by loading any page — they apply on the first request
+   after an upgrade, and the version is recorded in the database so they never
+   run twice.
 
 The application detects its existing configuration and starts normally. Any
 database changes a new version needs are applied automatically on boot, and
@@ -288,8 +324,10 @@ It is almost certainly a 1D-only scanner facing a QR label. Switch the
 organisation to Code 128 under Settings and reprint.
 
 **502 or "We're sorry, but something went wrong".**
-Passenger could not start the app. Check the log path shown in Setup Node.js
-App; the usual causes are a missing `npm install` or a Node version below 18.
+PHP failed before it could render anything. Check the error log in cPanel →
+**Errors**, or `error_log` in the application directory. The usual causes are a
+PHP version below 8.0 and a missing `pdo_mysql`; both are fixed under **Select
+PHP Version**.
 
 ---
 
@@ -298,18 +336,46 @@ App; the usual causes are a missing `npm install` or a Node version below 18.
 Nothing here depends on cPanel:
 
 ```bash
-npm install
-PORT=3000 npm start
+php -S 127.0.0.1:8080 -t public scripts/dev-router.php
 ```
 
-Then open `http://localhost:3000/` and run the installer. Behind nginx or
-Apache, proxy to the port and leave `LOANER_TRUST_PROXY` at its default so
-`req.ip` reflects the real client in the audit log.
+Then open `http://127.0.0.1:8080/` and run the installer. The router script
+mirrors what `public/.htaccess` does under Apache, so the development server
+behaves like a real host.
+
+Under any other web server, the rules are the same three things Apache needs:
+serve `public/` as the document root, route everything that is not a real file
+to `public/index.php`, and pass the `Authorization` header through to PHP
+(FastCGI strips it by default, which breaks API-key authentication in a way
+that looks like a bug in the keys).
+
+nginx, for example:
+
+```nginx
+root /home/account/loanerpool-src/public;
+index index.php;
+
+location / {
+    try_files $uri $uri/ /index.php?$query_string;
+}
+
+location ~ \.php$ {
+    include fastcgi_params;
+    fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+    fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    fastcgi_param HTTP_AUTHORIZATION $http_authorization;
+}
+
+# Never serve the data directory, whatever the document root says.
+location ^~ /data/ { deny all; return 404; }
+```
 
 Useful environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PORT` | `3000` | Listening port. Passenger sets this. |
-| `LOANER_CONFIG` | `./data/config.json` | Configuration file location. |
-| `LOANER_TRUST_PROXY` | enabled | Set `0` when not behind a proxy. |
+| `LOANER_CONFIG` | `<project>/data/config.json` | Configuration file location. Set it to move the credentials anywhere you like. |
+| `LOANER_TRUST_PROXY` | enabled | Honours `X-Forwarded-For` for the address recorded in the audit log. Set to `0` when PHP is exposed directly, or a client can forge its own audit entries. |
+
+Set these with `SetEnv` in `.htaccess`, in the vhost, or in the FPM pool
+configuration — whichever your host allows.

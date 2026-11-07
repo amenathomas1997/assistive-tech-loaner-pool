@@ -1,17 +1,47 @@
-# Passenger serves this application; Apache only needs to keep its own hands
-# off the source tree. cPanel's "Setup Node.js App" writes its own Passenger
-# directives above this block when the application is registered — do not
-# remove them.
+# Protection for the case where the project root — not public/ — is the
+# document root.
+#
+# The recommended arrangement points the subdomain at public/, in which case
+# nothing in this file is ever consulted and nothing outside public/ is
+# reachable at all. But plenty of shared hosts will not let an account change
+# its document root, and on those the configuration file, the application
+# source and the SQL schema would otherwise all be fetchable over HTTP.
+#
+# So: refuse everything here, and send what is left to the front controller.
 
-# Never serve the configuration file, the source, or the dependency tree as
-# static content. The Node application only serves public/, so this is
-# belt-and-braces for hosts that also expose the application root over HTTP.
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteRule ^(data|src|scripts|node_modules|docs)/ - [F,L]
-  RewriteRule ^(package(-lock)?\.json|\.env.*|.*\.sql|.*\.md)$ - [F,L]
+
+  # The configuration file holds the database password and the key that
+  # encrypts stored secrets. Uploads are clients' condition photos and
+  # signatures. Neither may ever be served, under any name or casing.
+  RewriteRule ^data(/|$)     - [F,L]
+  RewriteRule ^app(/|$)      - [F,L]
+  RewriteRule ^bin(/|$)      - [F,L]
+  RewriteRule ^scripts(/|$)  - [F,L]
+  RewriteRule ^docs(/|$)     - [F,L]
+  RewriteRule ^\.git         - [F,L]
+
+  RewriteRule \.(sql|md|json|lock|ini|log|sh|bak|dist|example)$ - [F,L]
+
+  # Anything else goes to the application, which lives in public/.
+  RewriteCond %{REQUEST_URI} !^/public/
+  RewriteRule ^(.*)$ public/$1 [L]
 </IfModule>
+
+# Belt and braces for hosts without mod_rewrite: deny by name as well.
+<FilesMatch "\.(sql|md|lock|ini|log|sh|bak|dist|example)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
 
 <IfModule mod_headers.c>
   Header always set X-Content-Type-Options "nosniff"
 </IfModule>
+
+Options -Indexes

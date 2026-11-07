@@ -8,8 +8,11 @@ Assistive technology loaner pool management: device inventory, barcode
 check-out and check-in, loan tracking, counselor requests, audit logging and a
 full REST API.
 
-Built as a plain HTML5 / CSS / JavaScript application on Node.js and MySQL,
-with no build step and no external runtime dependencies in the browser.
+Built on PHP, MySQL and Apache, with plain HTML5, CSS and JavaScript in the
+browser. No build step, no Composer, no package manager, no framework — upload
+the files and it runs. That is deliberate: this is software for agencies whose
+hosting is a cPanel account, and anything that needs a deploy pipeline is
+software they cannot run.
 
 ## Why this exists
 
@@ -105,16 +108,20 @@ first administrator, then closes itself permanently.
 Full instructions, including cPanel specifics and the Microsoft Graph setup:
 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 
-Locally:
+Locally, with nothing but PHP's own web server:
 
 ```bash
-npm install
-npm start
+php -S 127.0.0.1:8080 -t public scripts/dev-router.php
 ```
 
-Then open `http://localhost:3000/`.
+Then open `http://127.0.0.1:8080/`. The router script mirrors what
+`public/.htaccess` does under Apache, so the development server behaves the
+same way as a real host.
 
-Requires Node.js 18+ and MySQL 5.7+ or MariaDB 10.2+.
+Requires **PHP 8.0+** with `pdo_mysql`, `mbstring`, `json` and `openssl`, and
+**MySQL 5.7+** or **MariaDB 10.2+**. Those extensions are standard on every
+shared host; the application checks for them on the first request and says
+exactly which one is missing if not.
 
 ---
 
@@ -136,7 +143,12 @@ curl -X POST https://your-host/api/v1/loans/checkout \
 
 Keys are created under **Settings → API keys** with `read`, `write` or `admin`
 scope. The full reference is at `/api/v1/openapi.json` on your running
-installation, or in [docs/openapi.json](docs/openapi.json).
+installation — generated from the live route table, so it describes the paths,
+methods and required permission of the build you are actually running rather
+than a hand-maintained file that has drifted.
+
+Both `/api/v1/...` and the unversioned `/api/...` reach the same endpoints. Use
+the versioned path: it is the one that will not change under you.
 
 ---
 
@@ -167,16 +179,16 @@ light and dark schemes and in Windows High Contrast Mode.
 ```
 
 Drops and recreates the test database, runs the web installer through its own
-API, then exercises the application end to end — 223 checks covering
+API, then exercises the application end to end — 229 checks covering
 authentication, RBAC, spreadsheet import, barcode encoding, the loan
 lifecycle, the request workflow, kits and accessories, agreements and
 signatures, condition photos, the waitlist, repairs, funding reporting, bulk
 actions, scheduled jobs, password reset, API keys and the guard rails.
 
-Barcode encoders alone:
+Barcode encoders alone, with no database:
 
 ```bash
-node scripts/verify-barcode.js
+php scripts/verify-barcode.php
 ```
 
 The Code 128 and Code 39 tables are hand-transcribed, so this asserts
@@ -185,54 +197,97 @@ bar widths summing to an even number, all patterns unique — which catches a
 mistyped digit that would otherwise produce a label that scans as the wrong
 value.
 
+The QR encoder is checked differently, by decoding its own output with an
+independent library:
+
+```bash
+./scripts/verify-qr.sh
+```
+
+This is the one place Node is used, and only as a test harness. It exists
+because an encoder verified against itself is verified against nothing: an
+earlier version of this code produced symbols that looked perfect, passed every
+structural check, and decoded on no reader in the world, because two terms of
+the Reed–Solomon generator polynomial were transposed. A reimplementation by
+the same author reproduced the identical bug. Only a genuinely independent
+decoder found it.
+
 ---
 
 ## How it is put together
 
 ```
-app.js                  Passenger entry point
-src/
-  server.js             Express app, routing, error envelope
-  config.js             Install state and configuration file
-  db.js                 Connection pool, transactions, schema loader
-  schema.sql            Full DDL
-  lib/
-    auth.js             Sessions, roles, capabilities, API keys
-    loans.js            Loan lifecycle, including the check-out row lock
-    devices.js          Inventory and spreadsheet import
-    requests.js         Counselor request workflow
-    barcode.js          Barcode allocation and QR / Code 128 / Code 39
-    csv.js              RFC 4180 parser written for what Excel actually emits
-    mailer.js           Microsoft Graph client and templates
-    reports.js          Usage analytics
-    audit.js            Append-only audit trail
-    scanhub.js          Remote scanner pairing over SSE
-    settings.js         Per-organisation settings
-    secrets.js          AES-256-GCM encryption for stored credentials
-    util.js             Errors, validation, pagination, dates
-  routes/               One module per resource group
-public/
-  index.html            Application shell
+public/                 The document root — the ONLY directory web-exposed
+  index.php             Front controller; everything non-file arrives here
+  .htaccess             Rewrite rules, cache headers, Authorization pass-through
+  app.html              Application shell
   install.html          Setup wizard
-  scanner.html          Phone scanner
+  scanner.html          Phone scanner page
   css/app.css           Design system
   js/                   API client, UI primitives, views
-docs/                   OpenAPI document and deployment guide
-scripts/                Verification
+  vendor/jsQR.js        Vendored QR decoder (Apache-2.0) for camera scanning
+
+app/                    Application code, above the document root
+  bootstrap.php         Autoloader, error handling, environment checks
+  Config.php            Install state and the configuration file
+  Db.php                Lazy PDO, transactions, actionable error messages
+  Migrations.php        Idempotent schema upgrades
+  Auth.php              Sessions, roles, capabilities, API keys
+  Loans.php             Loan lifecycle, including the check-out row lock
+  Devices.php           Inventory and spreadsheet import
+  Requests.php          Counselor request workflow and fulfilment tracking
+  Reservations.php      Waitlists and holds
+  Kits.php              Kits, accessories, loan groups
+  Repairs.php           Repair tracking and reliability reporting
+  Agreements.php        Loan agreements and signatures
+  Attachments.php       Condition photos and signature images
+  Reports.php           Usage, demand, idle stock and funding analytics
+  Jobs.php              Scheduled reminders and housekeeping
+  Scan.php              Barcode lookup and phone pairing
+  Notifications.php     What to say and who should hear it
+  Mailer.php            Microsoft Graph client
+  Barcode.php           Allocation and Code 128 / Code 39 rendering
+  Qr.php                QR encoder (Reed-Solomon over GF(256))
+  Csv.php               RFC 4180 parser written for what Excel actually emits
+  Secrets.php           AES-256-GCM for stored credentials
+  Settings.php          Per-organisation settings
+  Audit.php             Append-only audit trail
+  Util.php              Errors, validation, pagination, dates
+  Routes/               One module per resource group
+
+bin/run-jobs.php        Cron entry point for the scheduled jobs
+schema.sql              Full DDL for a fresh install
+data/                   Config file and uploads — created at install, never web-served
+docs/                   Deployment guide
+scripts/                Verification and the development router
 ```
 
-Second-wave modules sit alongside those: `migrations.js` (idempotent schema
-upgrades applied on boot), `lib/jobs.js` (the reminder scheduler),
-`lib/agreements.js`, `lib/attachments.js`, `lib/kits.js`,
-`lib/reservations.js`, `lib/repairs.js`, and on the client
-`js/capture.js` (signature and photo capture), `js/offline.js` plus `sw.js`
-(the offline queue), and `js/views/workshop.js`.
+Only `public/` is inside the document root. The configuration file, the
+database credentials and every uploaded photo live in `data/`, one level above
+it, so a misconfigured server cannot serve them as static files.
 
 A few decisions that are load-bearing:
 
+- **Routes are matched by specificity, not registration order.** Express
+  matches in declaration order, which in an earlier version silently swallowed
+  `/devices/export.csv` as a device whose id was "export.csv". Scoring literal
+  path segments above parameters removes the whole class of mistake instead of
+  relying on everyone remembering the ordering rule.
 - **Check-out takes a row lock.** Two technicians scanning the same device at
   the same desk is a real scenario, so the device row is locked inside a
   transaction rather than checking `status` first and hoping.
+- **Sessions live in the database, not in PHP's session handler.** It is the
+  only way "changing your password signs you out everywhere" can be true, and
+  it means no session files to secure on shared hosting.
+- **Scheduled work runs from cron, not from inside a request.** A PHP request
+  ends when the response is sent, so there is nowhere for a timer to live. An
+  in-process scheduler would only fire while somebody happened to be using the
+  app — which is exactly when overdue reminders are not needed. The jobs screen
+  says plainly whether cron has actually run.
+- **The paired phone scanner is polled, not streamed.** PHP occupies a server
+  worker for the whole life of a request, so one long-lived connection per scan
+  station would exhaust the worker pool on precisely the shared hosting this is
+  built for.
 - **Overdue is derived, never stored.** A loan cannot sit at "active" while
   silently months overdue because a nightly job failed.
 - **Import is two-phase.** A dry run reports precisely what would happen and
@@ -263,8 +318,9 @@ Issues and pull requests are welcome — see
 the suite expects before a PR.
 
 Two things that are not negotiable, and are explained there: accessibility
-regressions are not merged, and schema changes go through `src/migrations.js`
-rather than `schema.sql`.
+regressions are not merged, and schema changes go through `app/Migrations.php`
+rather than `schema.sql`, so a site installed last year and one installed this
+morning converge on the same schema by the same code path.
 
 For anything security-related, please use private reporting rather than an
 issue — see [SECURITY.md](SECURITY.md).

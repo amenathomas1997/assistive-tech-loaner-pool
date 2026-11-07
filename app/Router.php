@@ -27,6 +27,27 @@ final class Router
      */
     private array $routes = [];
 
+    /**
+     * The registered routes, for introspection.
+     *
+     * Used to generate the OpenAPI description from the live table rather than
+     * from a hand-maintained file. A spec that is written separately drifts,
+     * and a wrong spec is worse than none for anyone building against it.
+     *
+     * @return list<array{method:string, pattern:string, capability:?string}>
+     */
+    public function describe(): array
+    {
+        return array_map(
+            static fn (array $route): array => [
+                'method'     => $route['method'],
+                'pattern'    => $route['pattern'],
+                'capability' => $route['capability'],
+            ],
+            $this->routes,
+        );
+    }
+
     public function get(string $pattern, callable $handler, ?string $capability = null): void
     {
         $this->add('GET', $pattern, $handler, $capability);

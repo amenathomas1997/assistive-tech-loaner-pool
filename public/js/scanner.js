@@ -2,8 +2,11 @@
  * Phone scanner.
  *
  * Turns a phone into a barcode scanner for a paired desktop scan station.
- * The phone decodes locally and POSTs the value; the desktop receives it over
- * Server-Sent Events.
+ * The phone decodes locally and POSTs the value; the desktop picks it up by
+ * short-polling, which is why there is no persistent connection here.
+ *
+ * The pairing code is the only credential, so this page can do exactly one
+ * thing: hand a barcode to the desk.
  *
  * Deliberately a separate page from the main app: it is opened by scanning a
  * QR from the desktop, is used one-handed while holding equipment, and needs
@@ -81,8 +84,8 @@ function renderJoin(message = null) {
     message ? alertBox(message, { type: 'info' }) : null,
     el('p', {
       text:
-        'Enter the pairing code from the scan station. You will need to be signed in to Loaner Pool ' +
-        'on this phone.',
+        'Enter the pairing code shown on the scan station. Nothing to install and no sign-in needed — ' +
+        'the code expires on its own.',
     }),
     form,
   );
@@ -295,24 +298,10 @@ async function send(barcode, source, lastScan = null, counter = null) {
 // ---------------------------------------------------------------------------
 
 async function boot() {
-  try {
-    await api.me();
-  } catch (err) {
-    clear(root).append(
-      alertBox(
-        'You need to be signed in to Loaner Pool on this phone before it can act as a scanner.',
-        { type: 'warn', title: 'Sign in first' },
-      ),
-      el('a', {
-        class: 'btn btn-primary btn-block',
-        href: `/#/scan`,
-      }, 'Sign in'),
-      el('p', { class: 'field-help', style: { marginTop: '10px' } },
-        'After signing in, scan the pairing QR code again or return to this page.'),
-    );
-    return;
-  }
-
+  // No sign-in on the phone. The pairing code is the credential: it expires
+  // within hours and the only thing it can do is hand a barcode to the desk,
+  // where a person still confirms every action. Making someone sign in on a
+  // borrowed phone would defeat the point of the feature.
   if (state.code) {
     try {
       const result = await api.joinScanChannel(state.code);

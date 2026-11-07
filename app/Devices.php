@@ -1,0 +1,941 @@
+<?php
+/**
+ * Device inventory: CRUD, spreadsheet ingest and barcode assignment.
+ *
+ * Import is deliberately two-phase. A dry run parses, maps and validates
+ * everything and reports exactly what would happen, without writing a row.
+ * Only a second call with dryRun = false commits. Inventory imports are the
+ * operation most likely to be run against the wrong file, and "undo" for a
+ * 900-row import is not something this application can offer.
+ */
+
+declare(strict_types=1);
+
+namespace Loaner;
+
+final class Devices
+{
+    public const STATUSES = ['available', 'checked_out', 'reserved', 'maintenance', 'retired', 'lost'];
+
+    private const MAX_IMPORT_ROWS = 20000;
+
+    /** Columns an import may write. */
+    private const IMPORTABLE = [
+        'barcode', 'asset_tag', 'serial_number', 'name', 'category', 'manufacturer', 'model',
+        'description', 'status', 'condition_note', 'location', 'home_location',
+        'purchase_date', 'purchase_cost', 'warranty_expires', 'funding_source', 'notes',
+    ];
+
+    private const SELECT = '
+        SELECT d.*,
+               p.name AS program_name,
+               l.id AS active_loan_id, l.reference AS active_loan_reference,
+               l.due_at AS active_loan_due_at, l.checked_out_at AS active_loan_checked_out_at,
+               t.full_name AS active_loan_tech_name,
+               c.first_name AS active_loan_client_first_name, c.last_name AS active_loan_client_last_name,
+               lp.name AS active_loan_program_name
+          FROM devices d
+          LEFT JOIN programs p ON p.id = d.owner_program_id
+          LEFT JOIN loans l ON l.device_id = d.id AND l.status = "active"
+          LEFT JOIN users t ON t.id = l.tech_id
+          LEFT JOIN clients c ON c.id = l.client_id
+          LEFT JOIN programs lp ON lp.id = l.program_id';
+
+    // -----------------------------------------------------------------------
+    // Reads
+    // -----------------------------------------------------------------------
+
+    public static function get(int $organizationId, int $deviceId): ?array
+    {
+        $row = Db::one(
+            self::SELECT . ' WHERE d.id = ? AND d.organization_id = ?',
+            [$deviceId, $organizationId],
+        );
+
+        return $row === null ? null : self::decorate($row);
+    }
+
+    public static function decorate(array $row): array
+    {
+        $holder = [];
+        if (!empty($row['active_loan_client_first_name'])) {
+            $holder[] = $row['active_loan_client_first_name'] . ' ' . $row['active_loan_client_last_name'];
+        }
+        if (!empty($row['active_loan_tech_name'])) {
+            $holder[] = $row['active_loan_tech_name'];
+        }
+        if (!empty($row['active_loan_program_name'])) {
+            $holder[] = $row['active_loan_program_name'];
+        }
+
+        $row['custom_fields'] = $row['custom_fields'] !== null
+            ? (json_decode((string) $row['custom_fields'], true) ?: null)
+            : null;
+
+        $row['is_available']   = $row['status'] === 'available' && empty($row['active_loan_id']);
+        $row['current_holder'] = $holder === [] ? null : implode(' / ', $holder);
+        $row['is_overdue']     = !empty($row['active_loan_id'])
+                              && !empty($row['active_loan_due_at'])
+                              && strtotime((string) $row['active_loan_due_at']) < time();
+
+        return $row;
+    }
+
+    public static function list(int $organizationId, array $filters = [], array $options = []): array
+    {
+        $limit  = (int) ($options['limit'] ?? 50);
+        $offset = (int) ($options['offset'] ?? 0);
+
+        $where  = ['d.organization_id = ?'];
+        $params = [$organizationId];
+
+        if (($filters['status'] ?? null) === 'available') {
+            $where[] = 'd.status = "available" AND l.id IS NULL';
+        } elseif (!empty($filters['status'])) {
+            $where[]  = 'd.status = ?';
+            $params[] = $filters['status'];
+        }
+
+        if (!empty($filters['category']))  { $where[] = 'd.category = ?';         $params[] = $filters['category']; }
+        if (!empty($filters['programId'])) { $where[] = 'd.owner_program_id = ?'; $params[] = $filters['programId']; }
+        if (!empty($filters['location']))  { $where[] = 'd.location = ?';         $params[] = $filters['location']; }
+
+        if (!empty($filters['overdue'])) {
+            $where[] = 'l.id IS NOT NULL AND l.due_at IS NOT NULL AND l.due_at < NOW()';
+        }
+
+        if (!empty($filters['search'])) {
+            $where[] = '(d.name LIKE ? OR d.barcode LIKE ? OR d.asset_tag LIKE ? OR d.serial_number LIKE ? '
+                     . 'OR d.manufacturer LIKE ? OR d.model LIKE ? OR d.category LIKE ?)';
+            $like = '%' . $filters['search'] . '%';
+            array_push($params, $like, $like, $like, $like, $like, $like, $like);
+        }
+
+        $whereSql = implode(' AND ', $where);
+
+        $sortColumns = [
+            'name' => 'd.name', 'barcode' => 'd.barcode', 'status' => 'd.status',
+            'category' => 'd.category', 'created_at' => 'd.created_at',
+            'asset_tag' => 'd.asset_tag', 'due_at' => 'l.due_at',
+        ];
+        $order = Util::orderBy($options['sort'] ?? null, $sortColumns, 'd.name ASC');
+
+        $rows = Db::all(
+            self::SELECT . " WHERE {$whereSql} ORDER BY {$order} LIMIT {$limit} OFFSET {$offset}",
+            $params,
+        );
+
+        $total = (int) Db::value(
+            "SELECT COUNT(DISTINCT d.id) FROM devices d
+               LEFT JOIN loans l ON l.device_id = d.id AND l.status = 'active'
+              WHERE {$whereSql}",
+            $params,
+        );
+
+        return ['rows' => array_map([self::class, 'decorate'], $rows), 'total' => $total];
+    }
+
+    /** Distinct categories, locations and statuses, for filter dropdowns. */
+    public static function facets(int $organizationId): array
+    {
+        return [
+            'categories' => Db::all(
+                'SELECT category AS value, COUNT(*) AS count FROM devices
+                  WHERE organization_id = ? AND category IS NOT NULL AND category <> ""
+                  GROUP BY category ORDER BY category',
+                [$organizationId],
+            ),
+            'locations' => Db::all(
+                'SELECT location AS value, COUNT(*) AS count FROM devices
+                  WHERE organization_id = ? AND location IS NOT NULL AND location <> ""
+                  GROUP BY location ORDER BY location',
+                [$organizationId],
+            ),
+            'statuses' => Db::all(
+                'SELECT status AS value, COUNT(*) AS count FROM devices
+                  WHERE organization_id = ? GROUP BY status',
+                [$organizationId],
+            ),
+        ];
+    }
+
+    // -----------------------------------------------------------------------
+    // Create and update
+    // -----------------------------------------------------------------------
+
+    public static function create(?array $actor, int $organizationId, array $data, string $barcodePrefix = 'LP'): array
+    {
+        $barcode = !empty($data['barcode'])
+            ? Barcode::normaliseScan($data['barcode'])
+            : Barcode::allocate(
+                static fn (string $candidate): bool =>
+                    Db::value('SELECT id FROM devices WHERE barcode = ?', [$candidate]) !== null,
+                $barcodePrefix,
+            );
+
+        $id = Db::insert(
+            'INSERT INTO devices
+               (organization_id, barcode, asset_tag, serial_number, name, category, manufacturer, model,
+                description, status, condition_note, location, home_location, owner_program_id,
+                purchase_date, purchase_cost, warranty_expires, funding_source, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                $organizationId, $barcode, $data['asset_tag'] ?? null, $data['serial_number'] ?? null,
+                $data['name'], $data['category'] ?? null, $data['manufacturer'] ?? null,
+                $data['model'] ?? null, $data['description'] ?? null, $data['status'] ?? 'available',
+                $data['condition_note'] ?? null, $data['location'] ?? null, $data['home_location'] ?? null,
+                $data['owner_program_id'] ?? null, $data['purchase_date'] ?? null,
+                $data['purchase_cost'] ?? null, $data['warranty_expires'] ?? null,
+                $data['funding_source'] ?? null, $data['notes'] ?? null,
+            ],
+        );
+
+        Audit::record($actor, [
+            'organizationId' => $organizationId,
+            'action'         => Audit::DEVICE_CREATED,
+            'entityType'     => 'device',
+            'entityId'       => $id,
+            'entityLabel'    => $data['name'],
+            'summary'        => "Added device {$data['name']} ({$barcode})",
+            'detail'         => ['barcode' => $barcode, 'asset_tag' => $data['asset_tag'] ?? null],
+        ]);
+
+        return self::get($organizationId, $id);
+    }
+
+    /** Fields an edit may change. Barcode is deliberately not among them. */
+    private const EDITABLE = [
+        'asset_tag', 'serial_number', 'name', 'category', 'manufacturer', 'model',
+        'description', 'status', 'condition_note', 'location', 'home_location',
+        'owner_program_id', 'purchase_date', 'purchase_cost', 'warranty_expires',
+        'funding_source', 'notes',
+    ];
+
+    /**
+     * Edit a device.
+     *
+     * Only supplied fields are touched, so a form that posts three fields
+     * cannot blank the other fourteen. The barcode is changed through
+     * reassignBarcode(), which records the old value — a silent barcode edit
+     * would leave printed labels pointing at nothing with no trace of why.
+     */
+    public static function update(?array $actor, int $organizationId, int $deviceId, array $data): array
+    {
+        $before = self::get($organizationId, $deviceId);
+        if ($before === null) {
+            throw Util::notFound('That device does not exist.');
+        }
+
+        $sets   = [];
+        $params = [];
+
+        foreach (self::EDITABLE as $column) {
+            // Accept both snake_case and camelCase so the API is forgiving
+            // about which convention a third-party client happens to use.
+            $camel = lcfirst(str_replace(' ', '', ucwords(str_replace('_', ' ', $column))));
+            $key   = array_key_exists($column, $data) ? $column
+                : (array_key_exists($camel, $data) ? $camel : null);
+
+            if ($key === null) {
+                continue;
+            }
+
+            $value = $data[$key];
+
+            // Lengths match the columns exactly, and the identifier-like
+            // fields refuse an over-long value instead of trimming it.
+            $value = match ($column) {
+                'name'             => Util::requiredStr($value, 'name', 190),
+                'status'           => Util::oneOf($value, self::STATUSES, 'status', true),
+                'purchase_cost'    => $value === null || $value === '' ? null : Util::decimal($value, 'purchase_cost'),
+                'purchase_date',
+                'warranty_expires' => $value === null || $value === '' ? null : Util::dateOnly($value, $column),
+                'owner_program_id' => $value ?: null,
+                'asset_tag'        => Util::boundedStr($value, 'asset_tag', 64) ?: null,
+                'serial_number'    => Util::boundedStr($value, 'serial_number', 128) ?: null,
+                'category'         => Util::boundedStr($value, 'category', 96),
+                'manufacturer'     => Util::boundedStr($value, 'manufacturer', 120),
+                'model'            => Util::boundedStr($value, 'model', 120),
+                'funding_source'   => Util::boundedStr($value, 'funding_source', 120),
+                'condition_note'   => Util::boundedStr($value, 'condition_note', 190),
+                'location'         => Util::boundedStr($value, 'location', 190),
+                'home_location'    => Util::boundedStr($value, 'home_location', 190),
+                'description',
+                'notes'            => Util::str($value),
+                default            => Util::str($value, 190),
+            };
+
+            $sets[]   = "{$column} = ?";
+            $params[] = $value;
+        }
+
+        if ($sets === []) {
+            return $before;
+        }
+
+        // Changing status by hand must not contradict an active loan: a device
+        // someone is holding is not "available", whatever the form says.
+        if (array_key_exists('status', $data) && !empty($before['active_loan_id'])
+            && in_array($data['status'], ['available', 'reserved'], true)
+        ) {
+            throw Util::conflict(
+                "{$before['name']} is out on loan {$before['active_loan_reference']}. Check it in rather "
+                . 'than changing its status by hand.',
+                ['loan_reference' => $before['active_loan_reference']],
+            );
+        }
+
+        if (!empty($data['owner_program_id'] ?? $data['ownerProgramId'] ?? null)) {
+            $programId = $data['owner_program_id'] ?? $data['ownerProgramId'];
+            $exists    = Db::value(
+                'SELECT id FROM programs WHERE id = ? AND organization_id = ?',
+                [$programId, $organizationId],
+            );
+            if ($exists === null) {
+                throw Util::badRequest('That program does not exist.', ['field' => 'owner_program_id']);
+            }
+        }
+
+        $sets[]   = 'updated_at = NOW()';
+        $params[] = $deviceId;
+        $params[] = $organizationId;
+
+        try {
+            Db::execute(
+                'UPDATE devices SET ' . implode(', ', $sets) . ' WHERE id = ? AND organization_id = ?',
+                $params,
+            );
+        } catch (\Throwable $e) {
+            throw self::translateDuplicate($e);
+        }
+
+        $after = self::get($organizationId, $deviceId);
+
+        Audit::record($actor, [
+            'organizationId' => $organizationId,
+            'action'         => array_key_exists('status', $data) && $before['status'] !== $after['status']
+                ? Audit::DEVICE_STATUS_CHANGED : Audit::DEVICE_UPDATED,
+            'entityType'     => 'device',
+            'entityId'       => $deviceId,
+            'entityLabel'    => $after['name'],
+            'summary'        => $before['status'] !== $after['status']
+                ? sprintf('%s: status %s → %s', $after['name'],
+                    str_replace('_', ' ', (string) $before['status']),
+                    str_replace('_', ' ', (string) $after['status']))
+                : "Updated {$after['name']}",
+            'detail'         => Audit::diff($before, $after, self::EDITABLE),
+        ]);
+
+        // A device returning to service may have someone waiting for it.
+        if ($before['status'] !== 'available' && $after['status'] === 'available') {
+            try {
+                Reservations::promoteNextForDevice($actor, $organizationId, $deviceId);
+            } catch (\Throwable $e) {
+                error_log('[devices] waitlist promotion failed: ' . $e->getMessage());
+            }
+        }
+
+        return $after;
+    }
+
+    /**
+     * Remove a device.
+     *
+     * Refused outright once it has any loan history: those loans are the
+     * record of who had what, and a cascade would quietly delete them.
+     * Retiring is offered instead, which is almost always what was meant.
+     */
+    public static function delete(?array $actor, int $organizationId, int $deviceId): array
+    {
+        $device = self::get($organizationId, $deviceId);
+        if ($device === null) {
+            throw Util::notFound('That device does not exist.');
+        }
+
+        if (!empty($device['active_loan_id'])) {
+            throw Util::conflict(
+                "{$device['name']} is out on loan {$device['active_loan_reference']} and cannot be removed.",
+                ['loan_reference' => $device['active_loan_reference']],
+            );
+        }
+
+        $loanCount = (int) Db::value('SELECT COUNT(*) FROM loans WHERE device_id = ?', [$deviceId]);
+
+        if ($loanCount > 0) {
+            throw Util::conflict(
+                sprintf(
+                    '%s has %d loan%s in its history, which would be deleted with it. Mark it retired '
+                    . 'instead — it then disappears from the pickers but the record of who borrowed it '
+                    . 'stays intact.',
+                    $device['name'], $loanCount, $loanCount === 1 ? '' : 's',
+                ),
+                ['loan_count' => $loanCount, 'suggestion' => 'retire'],
+            );
+        }
+
+        Db::execute('DELETE FROM devices WHERE id = ? AND organization_id = ?', [$deviceId, $organizationId]);
+
+        Audit::record($actor, [
+            'organizationId' => $organizationId,
+            'action'         => Audit::DEVICE_DELETED,
+            'entityType'     => 'device',
+            'entityId'       => $deviceId,
+            'entityLabel'    => $device['name'],
+            'summary'        => "Deleted device {$device['name']} ({$device['barcode']}), which had no loan history",
+        ]);
+
+        return ['deleted' => true, 'device' => $device];
+    }
+
+    /**
+     * Change the status of many devices at once.
+     *
+     * Partial success is reported rather than rolled back: a stocktake that
+     * marks forty devices and finds one out on loan should still record the
+     * thirty-nine.
+     */
+    public static function bulkStatus(?array $actor, int $organizationId, array $ids, string $status, ?string $note = null): array
+    {
+        Util::oneOf($status, self::STATUSES, 'status', true);
+
+        $changed = [];
+        $skipped = [];
+
+        foreach ($ids as $rawId) {
+            $deviceId = (int) $rawId;
+            if ($deviceId <= 0) {
+                continue;
+            }
+
+            try {
+                $device = self::update($actor, $organizationId, $deviceId, array_filter([
+                    'status'         => $status,
+                    'condition_note' => $note,
+                ], static fn ($v): bool => $v !== null));
+
+                $changed[] = ['id' => $deviceId, 'name' => $device['name'], 'status' => $device['status']];
+            } catch (\Throwable $e) {
+                $skipped[] = ['id' => $deviceId, 'reason' => $e->getMessage()];
+            }
+        }
+
+        return [
+            'changed'      => count($changed),
+            'failed_count' => count($skipped),
+            'devices'      => $changed,
+            'failures'     => $skipped,
+            'summary'      => sprintf(
+                '%d device%s set to %s%s.',
+                count($changed), count($changed) === 1 ? '' : 's',
+                str_replace('_', ' ', $status),
+                $skipped === [] ? '' : ', ' . count($skipped) . ' could not be changed',
+            ),
+        ];
+    }
+
+    /** Re-issue a barcode, e.g. after a label is damaged or duplicated. */
+    public static function reassignBarcode(?array $actor, int $organizationId, int $deviceId, string $prefix = 'LP'): array
+    {
+        $device = Db::one('SELECT * FROM devices WHERE id = ? AND organization_id = ?', [$deviceId, $organizationId]);
+        if ($device === null) {
+            throw Util::notFound('That device does not exist.');
+        }
+
+        $newBarcode = Barcode::allocate(
+            static fn (string $candidate): bool =>
+                Db::value('SELECT id FROM devices WHERE barcode = ?', [$candidate]) !== null,
+            $prefix,
+        );
+
+        Db::execute('UPDATE devices SET barcode = ?, updated_at = NOW() WHERE id = ?', [$newBarcode, $deviceId]);
+
+        Audit::record($actor, [
+            'organizationId' => $organizationId,
+            'action'         => Audit::DEVICE_BARCODE_ASSIGNED,
+            'entityType'     => 'device',
+            'entityId'       => $deviceId,
+            'entityLabel'    => $device['name'],
+            'summary'        => "Reassigned barcode for {$device['name']}: {$device['barcode']} → {$newBarcode}",
+            'detail'         => ['old_barcode' => $device['barcode'], 'new_barcode' => $newBarcode],
+        ]);
+
+        return self::get($organizationId, $deviceId);
+    }
+
+    /** Give barcodes to devices that somehow lack one. Safe to re-run. */
+    public static function backfillBarcodes(?array $actor, int $organizationId, string $prefix = 'LP'): array
+    {
+        $missing = Db::all(
+            'SELECT id, name FROM devices WHERE organization_id = ? AND (barcode IS NULL OR barcode = "")',
+            [$organizationId],
+        );
+
+        foreach ($missing as $device) {
+            $barcode = Barcode::allocate(
+                static fn (string $candidate): bool =>
+                    Db::value('SELECT id FROM devices WHERE barcode = ?', [$candidate]) !== null,
+                $prefix,
+            );
+            Db::execute('UPDATE devices SET barcode = ?, updated_at = NOW() WHERE id = ?', [$barcode, $device['id']]);
+        }
+
+        if ($missing !== []) {
+            Audit::record($actor, [
+                'organizationId' => $organizationId,
+                'action'         => Audit::DEVICE_BARCODE_ASSIGNED,
+                'entityType'     => 'device',
+                'summary'        => 'Assigned barcodes to ' . count($missing) . ' device(s) that had none',
+            ]);
+        }
+
+        return ['assigned' => count($missing)];
+    }
+
+    /** Turn a duplicate-key error into a message naming the actual field. */
+    public static function translateDuplicate(\Throwable $e): \Throwable
+    {
+        if (!Db::isDuplicate($e)) {
+            return $e;
+        }
+
+        $message = $e->getMessage();
+
+        return match (true) {
+            str_contains($message, 'uq_device_barcode') => Util::conflict('Another device already uses that barcode.', ['field' => 'barcode']),
+            str_contains($message, 'uq_device_asset')   => Util::conflict('Another device already uses that asset tag.', ['field' => 'asset_tag']),
+            str_contains($message, 'uq_device_serial')  => Util::conflict('Another device already uses that serial number.', ['field' => 'serial_number']),
+            default => Util::conflict('That value is already in use by another device.'),
+        };
+    }
+
+    // -----------------------------------------------------------------------
+    // Import
+    // -----------------------------------------------------------------------
+
+    /** Parse and propose a mapping without touching the database. */
+    public static function previewImport(string $text, ?string $delimiter = null): array
+    {
+        ['headers' => $headers, 'records' => $records] = Csv::toRecords($text, $delimiter);
+
+        if (count($records) > self::MAX_IMPORT_ROWS) {
+            throw Util::badRequest(sprintf(
+                'That file has %d rows, which is over the %d row limit. Split it into smaller files.',
+                count($records),
+                self::MAX_IMPORT_ROWS,
+            ));
+        }
+
+        ['mapping' => $mapping, 'unmapped' => $unmapped] = Csv::suggestMapping($headers);
+
+        $samples = [];
+        foreach (array_slice($records, 0, 5) as $record) {
+            unset($record['__line']);
+            $samples[] = $record;
+        }
+
+        return [
+            'row_count'         => count($records),
+            'headers'           => $headers,
+            'suggested_mapping' => $mapping,
+            'unmapped_headers'  => $unmapped,
+            'importable_fields' => array_keys(Csv::DEVICE_ALIASES),
+            'sample_rows'       => $samples,
+        ];
+    }
+
+    /**
+     * Import devices.
+     *
+     * Matching for updates, in priority order: barcode, then serial number,
+     * then asset tag — the order of how uniquely each identifies real hardware.
+     */
+    public static function import(?array $actor, array $input): array
+    {
+        $organizationId = (int) $input['organizationId'];
+        $dryRun         = (bool) ($input['dryRun'] ?? true);
+        $updateExisting = (bool) ($input['updateExisting'] ?? true);
+        $defaultStatus  = (string) ($input['defaultStatus'] ?? 'available');
+        $prefix         = (string) ($input['barcodePrefix'] ?? 'LP');
+        $filename       = $input['filename'] ?? null;
+
+        ['headers' => $headers, 'records' => $records] = Csv::toRecords($input['text'], $input['delimiter'] ?? null);
+
+        if ($records === []) {
+            throw Util::badRequest('That file has a header row but no data rows.');
+        }
+        if (count($records) > self::MAX_IMPORT_ROWS) {
+            throw Util::badRequest('That file has ' . count($records) . ' rows, over the limit.');
+        }
+
+        $mapping = $input['mapping'] ?? Csv::suggestMapping($headers)['mapping'];
+        $ignored = $input['ignoreHeaders'] ?? [];
+
+        // A device needs something to be called. Refusing up front beats
+        // importing 800 rows named "Unnamed device".
+        $mappedFields = array_values($mapping);
+        if (!array_intersect(['name', 'model', 'asset_tag'], $mappedFields)) {
+            throw Util::badRequest(
+                'The import needs at least one column mapped to "name", "model" or "asset_tag" '
+                . 'so each device can be identified.',
+                ['mapped_fields' => $mappedFields],
+            );
+        }
+
+        // Program names resolve to ids once, not per row.
+        $programs = [];
+        foreach (Db::all('SELECT id, name, code FROM programs WHERE organization_id = ?', [$organizationId]) as $p) {
+            $programs[strtolower($p['name'])] = (int) $p['id'];
+            if (!empty($p['code'])) {
+                $programs[strtolower($p['code'])] = (int) $p['id'];
+            }
+        }
+
+        $errors       = [];
+        $plan         = [];
+        $seenBarcodes = [];
+        $seenSerials  = [];
+        $seenAssets   = [];
+
+        foreach ($records as $record) {
+            $line      = $record['__line'];
+            $rowErrors = [];
+            $device    = [];
+            $custom    = [];
+
+            foreach ($headers as $header) {
+                if ($header === '__line') {
+                    continue;
+                }
+
+                $raw   = $record[$header] ?? '';
+                $field = $mapping[$header] ?? null;
+
+                if ($field === null || $field === '__ignore') {
+                    if (!in_array($header, $ignored, true) && trim((string) $raw) !== '') {
+                        $custom[$header] = $raw;
+                    }
+                    continue;
+                }
+
+                $value = Util::str($raw);
+                if ($value === null) {
+                    continue;
+                }
+
+                switch ($field) {
+                    case 'purchase_date':
+                    case 'warranty_expires':
+                        $parsed = Csv::parseDate($value);
+                        if ($parsed === null) {
+                            $rowErrors[] = "\"{$header}\" value \"{$value}\" is not a date this importer recognises";
+                        } else {
+                            $device[$field] = $parsed;
+                        }
+                        break;
+
+                    case 'purchase_cost':
+                        $parsed = Csv::parseMoney($value);
+                        if ($parsed === null) {
+                            $rowErrors[] = "\"{$header}\" value \"{$value}\" is not a number";
+                        } else {
+                            $device[$field] = $parsed;
+                        }
+                        break;
+
+                    case 'status':
+                        $parsed = Csv::normaliseStatus($value);
+                        if ($parsed === null) {
+                            $rowErrors[] = "\"{$header}\" value \"{$value}\" is not a status this importer recognises";
+                        } else {
+                            $device[$field] = $parsed;
+                        }
+                        break;
+
+                    case 'program':
+                        $programId = $programs[strtolower($value)] ?? null;
+                        if ($programId === null) {
+                            $rowErrors[] = "program \"{$value}\" does not exist — create it first, or leave the column unmapped";
+                        } else {
+                            $device['owner_program_id'] = $programId;
+                        }
+                        break;
+
+                    case 'barcode':
+                        $parsed = Barcode::normaliseScan($value);
+                        if ($parsed === null) {
+                            $rowErrors[] = "\"{$header}\" is empty after cleanup";
+                        } else {
+                            $device['barcode'] = $parsed;
+                        }
+                        break;
+
+                    default:
+                        $device[$field] = $value;
+                }
+            }
+
+            // Derive a name when the sheet has no explicit name column.
+            if (empty($device['name'])) {
+                $derived = trim(($device['manufacturer'] ?? '') . ' ' . ($device['model'] ?? ''));
+                $device['name'] = $derived !== ''
+                    ? $derived
+                    : ($device['asset_tag'] ?? $device['serial_number'] ?? null);
+            }
+            if (empty($device['name'])) {
+                $rowErrors[] = 'could not determine a device name from this row';
+            }
+
+            // Duplicates within the file itself, which the database would only
+            // catch one at a time, halfway through the import.
+            if (!empty($device['barcode'])) {
+                if (in_array($device['barcode'], $seenBarcodes, true)) {
+                    $rowErrors[] = "barcode \"{$device['barcode']}\" appears more than once in this file";
+                }
+                $seenBarcodes[] = $device['barcode'];
+            }
+            if (!empty($device['serial_number'])) {
+                $key = strtoupper($device['serial_number']);
+                if (in_array($key, $seenSerials, true)) {
+                    $rowErrors[] = "serial number \"{$device['serial_number']}\" appears more than once in this file";
+                }
+                $seenSerials[] = $key;
+            }
+            if (!empty($device['asset_tag'])) {
+                $key = strtoupper($device['asset_tag']);
+                if (in_array($key, $seenAssets, true)) {
+                    $rowErrors[] = "asset tag \"{$device['asset_tag']}\" appears more than once in this file";
+                }
+                $seenAssets[] = $key;
+            }
+
+            if ($rowErrors !== []) {
+                $errors[] = [
+                    'line'   => $line,
+                    'errors' => $rowErrors,
+                    'row'    => [
+                        'name'          => $device['name'] ?? null,
+                        'asset_tag'     => $device['asset_tag'] ?? null,
+                        'serial_number' => $device['serial_number'] ?? null,
+                        'barcode'       => $device['barcode'] ?? null,
+                    ],
+                ];
+                continue;
+            }
+
+            if ($custom !== []) {
+                $device['custom_fields'] = json_encode($custom, JSON_UNESCAPED_SLASHES);
+            }
+            if (empty($device['status'])) {
+                $device['status'] = $defaultStatus;
+            }
+
+            $existing = self::findExisting($organizationId, $device);
+
+            $plan[] = [
+                'line'            => $line,
+                'action'          => $existing === null ? 'create' : ($updateExisting ? 'update' : 'skip'),
+                'existing_id'     => $existing['id'] ?? null,
+                'existing_barcode' => $existing['barcode'] ?? null,
+                'device'          => $device,
+            ];
+        }
+
+        $toCreate = count(array_filter($plan, static fn (array $p): bool => $p['action'] === 'create'));
+        $toUpdate = count(array_filter($plan, static fn (array $p): bool => $p['action'] === 'update'));
+        $toSkip   = count(array_filter($plan, static fn (array $p): bool => $p['action'] === 'skip'));
+
+        $summary = [
+            'row_count'        => count($records),
+            'to_create'        => $toCreate,
+            'to_update'        => $toUpdate,
+            'to_skip'          => $toSkip,
+            'error_count'      => count($errors),
+            'errors'           => array_slice($errors, 0, 200),
+            'errors_truncated' => count($errors) > 200,
+            'mapping'          => $mapping,
+            'dry_run'          => $dryRun,
+        ];
+
+        if ($dryRun) {
+            // Record the dry run so an admin can see a file was evaluated.
+            Db::execute(
+                'INSERT INTO device_imports
+                   (organization_id, filename, row_count, created_count, updated_count, skipped_count,
+                    error_count, column_mapping, errors, dry_run, imported_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)',
+                [
+                    $organizationId, $filename, count($records), $toCreate, $toUpdate, $toSkip,
+                    count($errors), json_encode($mapping), json_encode(array_slice($errors, 0, 200)),
+                    $actor['userId'] ?? null,
+                ],
+            );
+
+            $summary['preview'] = array_map(
+                static fn (array $e): array => [
+                    'line'             => $e['line'],
+                    'action'           => $e['action'],
+                    'existing_id'      => $e['existing_id'],
+                    'existing_barcode' => $e['existing_barcode'],
+                    'name'             => $e['device']['name'],
+                    'asset_tag'        => $e['device']['asset_tag'] ?? null,
+                    'serial_number'    => $e['device']['serial_number'] ?? null,
+                    'barcode'          => $e['device']['barcode'] ?? '(will be assigned)',
+                ],
+                array_slice($plan, 0, 25),
+            );
+
+            return $summary;
+        }
+
+        // --- Commit -----------------------------------------------------------
+        $result = Db::transaction(static function () use ($plan, $organizationId, $filename, $records, $mapping, $errors, $actor, $prefix): array {
+            $importId = Db::insert(
+                'INSERT INTO device_imports
+                   (organization_id, filename, row_count, column_mapping, errors, dry_run, imported_by)
+                 VALUES (?, ?, ?, ?, ?, 0, ?)',
+                [$organizationId, $filename, count($records), json_encode($mapping),
+                 json_encode(array_slice($errors, 0, 200)), $actor['userId'] ?? null],
+            );
+
+            $created = 0;
+            $updated = 0;
+            $skipped = 0;
+
+            $exists = static fn (string $candidate): bool =>
+                Db::value('SELECT id FROM devices WHERE barcode = ?', [$candidate]) !== null;
+
+            foreach ($plan as $entry) {
+                if ($entry['action'] === 'skip') {
+                    $skipped++;
+                    continue;
+                }
+
+                $device = $entry['device'];
+
+                if ($entry['action'] === 'create') {
+                    $barcode = $device['barcode'] ?? Barcode::allocate($exists, $prefix);
+
+                    Db::execute(
+                        'INSERT INTO devices
+                           (organization_id, barcode, asset_tag, serial_number, name, category, manufacturer,
+                            model, description, status, condition_note, location, home_location,
+                            owner_program_id, purchase_date, purchase_cost, warranty_expires, funding_source,
+                            notes, custom_fields, import_id)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        [
+                            $organizationId, $barcode, $device['asset_tag'] ?? null,
+                            $device['serial_number'] ?? null, $device['name'], $device['category'] ?? null,
+                            $device['manufacturer'] ?? null, $device['model'] ?? null,
+                            $device['description'] ?? null, $device['status'],
+                            $device['condition_note'] ?? null, $device['location'] ?? null,
+                            $device['home_location'] ?? null, $device['owner_program_id'] ?? null,
+                            $device['purchase_date'] ?? null, $device['purchase_cost'] ?? null,
+                            $device['warranty_expires'] ?? null, $device['funding_source'] ?? null,
+                            $device['notes'] ?? null, $device['custom_fields'] ?? null, $importId,
+                        ],
+                    );
+                    $created++;
+                    continue;
+                }
+
+                // Update: only overwrite columns the sheet actually supplied,
+                // so a partial spreadsheet cannot blank out data it knows
+                // nothing about.
+                $updatable = array_values(array_filter(
+                    array_merge(self::IMPORTABLE, ['owner_program_id', 'custom_fields']),
+                    static fn (string $f): bool => $f !== 'barcode' && array_key_exists($f, $device),
+                ));
+
+                if ($updatable === []) {
+                    $skipped++;
+                    continue;
+                }
+
+                $sets   = implode(', ', array_map(static fn (string $f): string => "{$f} = ?", $updatable));
+                $params = array_map(static fn (string $f) => $device[$f], $updatable);
+                $params[] = $importId;
+                $params[] = $entry['existing_id'];
+                $params[] = $organizationId;
+
+                Db::execute(
+                    "UPDATE devices SET {$sets}, import_id = ?, updated_at = NOW()
+                      WHERE id = ? AND organization_id = ?",
+                    $params,
+                );
+                $updated++;
+            }
+
+            Db::execute(
+                'UPDATE device_imports SET created_count = ?, updated_count = ?, skipped_count = ?, error_count = ?
+                  WHERE id = ?',
+                [$created, $updated, $skipped, count($errors), $importId],
+            );
+
+            return ['importId' => $importId, 'created' => $created, 'updated' => $updated, 'skipped' => $skipped];
+        });
+
+        Audit::record($actor, [
+            'organizationId' => $organizationId,
+            'action'         => Audit::DEVICE_IMPORTED,
+            'entityType'     => 'device_import',
+            'entityId'       => $result['importId'],
+            'entityLabel'    => $filename,
+            'summary'        => sprintf(
+                'Imported %s: %d created, %d updated, %d skipped, %d rejected',
+                $filename ?? 'spreadsheet',
+                $result['created'],
+                $result['updated'],
+                $result['skipped'],
+                count($errors),
+            ),
+            'detail' => $result + ['error_count' => count($errors)],
+        ]);
+
+        return $summary + [
+            'dry_run'       => false,
+            'import_id'     => $result['importId'],
+            'created_count' => $result['created'],
+            'updated_count' => $result['updated'],
+            'skipped_count' => $result['skipped'],
+        ];
+    }
+
+    private static function findExisting(int $organizationId, array $device): ?array
+    {
+        foreach ([['barcode', 'barcode'], ['serial_number', 'serial_number'], ['asset_tag', 'asset_tag']] as [$key, $column]) {
+            if (empty($device[$key])) {
+                continue;
+            }
+
+            $row = Db::one(
+                "SELECT id, barcode FROM devices WHERE {$column} = ? AND organization_id = ?",
+                [$device[$key], $organizationId],
+            );
+
+            if ($row !== null) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    public static function importHistory(int $organizationId): array
+    {
+        $rows = Db::all(
+            'SELECT i.*, u.full_name AS imported_by_name
+               FROM device_imports i
+               LEFT JOIN users u ON u.id = i.imported_by
+              WHERE i.organization_id = ?
+              ORDER BY i.created_at DESC LIMIT 50',
+            [$organizationId],
+        );
+
+        foreach ($rows as &$row) {
+            $row['column_mapping'] = $row['column_mapping'] !== null ? json_decode((string) $row['column_mapping'], true) : null;
+            $row['errors']         = $row['errors'] !== null ? json_decode((string) $row['errors'], true) : null;
+        }
+
+        return $rows;
+    }
+}

@@ -45,7 +45,7 @@ final class Auth
      * Capability map. Routes ask for a capability, not a role, so adding a
      * role later means editing this table rather than hunting for role checks.
      */
-    private const CAPABILITIES = [
+    public const CAPABILITIES = [
         'admin' => [
             'devices.read', 'devices.write', 'devices.import', 'devices.delete',
             'loans.read', 'loans.write', 'loans.cancel',
@@ -481,6 +481,44 @@ final class Auth
     public static function isRestrictedToOwnRecords(?array $auth): bool
     {
         return ($auth['actorType'] ?? '') === 'user' && ($auth['role'] ?? '') === 'vrc';
+    }
+
+    /**
+     * The user id a record-restricted caller is limited to, or null when they
+     * may see everything.
+     *
+     * Routes use this instead of re-deriving the rule, so "a counselor sees
+     * their own caseload" is expressed in one place. Returning null for
+     * everyone else means a route can pass the result straight into a filter.
+     */
+    public static function ownRecordsOnly(?array $auth): ?int
+    {
+        return self::isRestrictedToOwnRecords($auth) ? (int) $auth['userId'] : null;
+    }
+
+    /**
+     * Refuse a caller who may only see their own records.
+     *
+     * For the handful of endpoints that are inherently organisation-wide and
+     * cannot be meaningfully narrowed — who else is borrowing what, what the
+     * equipment cost. Scoping them would produce a report that looks complete
+     * and is not, which is worse than refusing.
+     */
+    public static function requireFullRecordAccess(Request $request, string $what): array
+    {
+        $auth = self::requireAuth($request);
+
+        if (self::isRestrictedToOwnRecords($auth)) {
+            throw new HttpError(
+                403,
+                'forbidden',
+                "{$what} covers everyone's records, so it is limited to technicians and "
+                . 'administrators. You can see your own requests and clients from their own screens.',
+                ['role' => $auth['role'] ?? null],
+            );
+        }
+
+        return $auth;
     }
 
     /** Public-safe view of a user row. */

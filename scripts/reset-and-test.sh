@@ -43,7 +43,7 @@ if [ -z "$MYSQL_BIN" ]; then
 fi
 
 echo "==> Stopping any running instance"
-pkill -f "node src/server.js" 2>/dev/null
+pkill -f "scripts/dev-router.php" 2>/dev/null
 sleep 1
 
 echo "==> Resetting database $DB_NAME"
@@ -55,7 +55,12 @@ echo "==> Removing config so the app returns to installer mode"
 rm -f data/config.json
 
 echo "==> Starting server on port $PORT"
-PORT="$PORT" node src/server.js > /tmp/loaner-test-server.log 2>&1 &
+# PHP's built-in server with the dev router, which mirrors what .htaccess does
+# under Apache. Single-threaded by default, so the worker count is raised:
+# several endpoints call back into the API, and one request waiting on another
+# would deadlock a single worker.
+PHP_CLI_SERVER_WORKERS=8 php -S "127.0.0.1:$PORT" -t public scripts/dev-router.php \
+  > /tmp/loaner-test-server.log 2>&1 &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null' EXIT
 
@@ -95,7 +100,7 @@ fi
 echo "    installed"
 
 echo "==> Running barcode encoder checks"
-node scripts/verify-barcode.js || exit 1
+php scripts/verify-barcode.php || exit 1
 
 echo "==> Running end-to-end API suite"
 ./scripts/e2e.sh "http://localhost:$PORT"

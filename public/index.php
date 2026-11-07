@@ -56,11 +56,16 @@ try {
     // Deliberately available in both modes: it is how you tell "PHP is running
     // but not set up" apart from "the server is broken".
     if ($request->path === '/health') {
+        // Unauthenticated by necessity — it is how a monitor tells "PHP is
+        // running but not set up" from "the server is broken". So it reports
+        // only the major.minor PHP line: an uptime check does not need the
+        // patch level, and handing it to anyone who asks only helps someone
+        // matching the build against a list of known vulnerabilities.
         $status = [
             'ok'           => true,
             'app_version'  => APP_VERSION,
             'installed'    => $installed,
-            'php_version'  => PHP_VERSION,
+            'php_version'  => PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION,
             'server_time'  => date('c'),
         ];
 

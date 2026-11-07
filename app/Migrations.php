@@ -19,7 +19,7 @@ namespace Loaner;
 final class Migrations
 {
     /** Highest version this build knows about. */
-    public const TARGET_VERSION = 2;
+    public const TARGET_VERSION = 3;
 
     // -----------------------------------------------------------------------
     // Idempotent DDL helpers
@@ -348,6 +348,18 @@ final class Migrations
                     self::addIndex('loans', 'idx_loan_group', 'KEY idx_loan_group (group_ref)', $log);
 
                     self::addColumn('devices', 'active_repair_id', 'INT UNSIGNED DEFAULT NULL', $log);
+                },
+            ],
+            [
+                'version' => 3,
+                'name'    => 'Polled scan channels',
+                'up'      => static function (array &$log): void {
+                    // The scan station polls for its phone's scans rather than
+                    // holding a stream open. Recording when it last asked is
+                    // what lets the phone tell the operator whether anyone is
+                    // actually listening — without it, a phone scanning into a
+                    // closed station looks exactly like one that is working.
+                    self::addColumn('scan_channels', 'last_poll_at', 'DATETIME DEFAULT NULL', $log);
                 },
             ],
         ];

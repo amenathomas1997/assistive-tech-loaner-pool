@@ -44,7 +44,7 @@ final class Install
         Response::json([
             'installed'         => false,
             'app_version'       => \Loaner\APP_VERSION,
-            'schema_version'    => \Loaner\SCHEMA_VERSION,
+            'schema_version'    => Migrations::TARGET_VERSION,
             'config_path'       => Config::path(),
             'node_version'      => 'PHP ' . PHP_VERSION,
             'php_version'       => PHP_VERSION,
@@ -268,7 +268,7 @@ final class Install
             $pdo->prepare(
                 'INSERT INTO schema_meta (id, schema_version, app_version) VALUES (1, ?, ?)
                  ON DUPLICATE KEY UPDATE schema_version = VALUES(schema_version), app_version = VALUES(app_version)'
-            )->execute([\Loaner\SCHEMA_VERSION, \Loaner\APP_VERSION]);
+            )->execute([\Loaner\BASE_SCHEMA_VERSION, \Loaner\APP_VERSION]);
 
             $pdo->prepare(
                 'INSERT INTO audit_log (organization_id, actor_id, actor_label, actor_type, action,
@@ -340,6 +340,8 @@ final class Install
         // permissions problem surfaces during setup and not weeks later when
         // somebody first attaches a photo.
         @mkdir(Config::uploadsDir(), 0700, true);
+        Config::protectDirectory(Config::dataDir());
+        Config::protectDirectory(Config::uploadsDir());
 
         Response::json([
             'ok'             => true,

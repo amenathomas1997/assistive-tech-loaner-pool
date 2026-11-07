@@ -424,16 +424,87 @@ export async function renderScanStation() {
 
   // --- Remote phone pairing ------------------------------------------------
 
-  let eventSource = null;
+  // Scans from the paired phone are short-polled rather than streamed. PHP
+  // occupies a server worker for the whole life of a request, so one long-lived
+  // connection per scan station would exhaust the worker pool on exactly the
+  // kind of shared hosting this runs on. The server tells us how long to wait
+  // before asking again, so the rate can be eased without changing this file.
+  let pollTimer = null;
+  let pollAbort = null;
+  let lastEventId = 0;
   let channel = null;
   const pairingArea = el('div');
 
+  function setPairStatus(text) {
+    const status = document.getElementById('pair-status');
+    if (status) status.textContent = text;
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    if (pollAbort) { pollAbort.abort(); pollAbort = null; }
+  }
+
   function closeChannelStream() {
-    if (eventSource) { eventSource.close(); eventSource = null; }
+    stopPolling();
+    lastEventId = 0;
     if (channel) {
       api.closeScanChannel(channel.id).catch(() => {});
       channel = null;
     }
+  }
+
+  function channelClosed(reason) {
+    toastWarn(reason || 'The pairing channel closed.');
+    stopPolling();
+    channel = null;
+    lastEventId = 0;
+    clear(pairingArea);
+    pairButton.textContent = 'Pair a phone as a scanner';
+  }
+
+  async function pollOnce() {
+    if (!channel) return;
+
+    pollAbort = new AbortController();
+
+    let result;
+    try {
+      result = await api.get(`/scan/channels/${channel.id}/events`, {
+        query: { after: lastEventId },
+        signal: pollAbort.signal,
+      });
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+
+      // A dropped connection is not a closed channel — the phone may still be
+      // scanning. Keep trying, but back off so a server that is down is not
+      // hammered, and say so rather than looking idle.
+      setPairStatus('Connection interrupted — retrying…');
+      pollTimer = setTimeout(pollOnce, 5000);
+      return;
+    } finally {
+      pollAbort = null;
+    }
+
+    if (!channel) return;
+
+    if (result.closed) {
+      channelClosed(result.reason);
+      return;
+    }
+
+    for (const event of result.events || []) {
+      lastEventId = Math.max(lastEventId, event.id);
+      setPairStatus(`Last scan from the phone: ${event.barcode}`);
+      handleScan(event.barcode, 'phone');
+    }
+
+    if ((result.events || []).length === 0 && lastEventId === 0) {
+      setPairStatus('Waiting for a phone to connect…');
+    }
+
+    pollTimer = setTimeout(pollOnce, result.poll_after_ms || 1500);
   }
 
   const pairButton = el('button', { type: 'button', class: 'btn' }, 'Pair a phone as a scanner');
@@ -475,29 +546,8 @@ export async function renderScanStation() {
         ]),
       );
 
-      // EventSource cannot carry an Authorization header, so this relies on
-      // the session cookie — which is why remote scanning is session-only.
-      eventSource = new EventSource(`/api/v1/scan/channels/${channel.id}/stream`);
-
-      eventSource.addEventListener('scan', (event) => {
-        const payload = JSON.parse(event.data);
-        const status = document.getElementById('pair-status');
-        if (status) status.textContent = `Last scan from the phone: ${payload.barcode}`;
-        handleScan(payload.barcode, 'phone');
-      });
-
-      eventSource.addEventListener('closed', (event) => {
-        const payload = JSON.parse(event.data);
-        toastWarn(payload.reason || 'The pairing channel closed.');
-        closeChannelStream();
-        clear(pairingArea);
-        pairButton.textContent = 'Pair a phone as a scanner';
-      });
-
-      eventSource.onerror = () => {
-        const status = document.getElementById('pair-status');
-        if (status) status.textContent = 'Connection interrupted — reconnecting…';
-      };
+      lastEventId = 0;
+      pollOnce();
 
       announce(`Pairing code ${result.channel.pair_code.split('').join(' ')}. Enter it on the phone.`);
     } catch (err) {

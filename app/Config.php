@@ -51,6 +51,46 @@ final class Config
         return self::dataDir() . '/uploads';
     }
 
+    /**
+     * Drop a deny-everything .htaccess into a directory that must never be
+     * served.
+     *
+     * The recommended arrangement points the document root at `public/`, in
+     * which case this directory is not under the web server at all and the file
+     * is never consulted. But a host that will not allow a custom document
+     * root, or an administrator who later moves the root, would otherwise make
+     * the database password and clients' condition photos fetchable over HTTP.
+     *
+     * Written next to the data rather than kept in the repository so the
+     * protection travels with the directory, including to a directory an
+     * administrator points LOANER_CONFIG at. Never overwritten: a host-specific
+     * rule somebody added by hand is more likely to be right than this.
+     */
+    public static function protectDirectory(string $dir): void
+    {
+        $path = $dir . '/.htaccess';
+
+        if (file_exists($path) || !is_dir($dir) || !is_writable($dir)) {
+            return;
+        }
+
+        @file_put_contents($path, <<<'HTACCESS'
+            # Deny everything. This directory holds the configuration file —
+            # database password and the key that encrypts stored secrets — and
+            # clients' condition photos and signatures.
+            #
+            # Written automatically by the application. Safe to replace with a
+            # stricter rule for your host; it will not be overwritten.
+            <IfModule mod_authz_core.c>
+              Require all denied
+            </IfModule>
+            <IfModule !mod_authz_core.c>
+              Order allow,deny
+              Deny from all
+            </IfModule>
+            HTACCESS);
+    }
+
     /** Read config from disk, or null when the app has not been installed. */
     public static function get(): ?array
     {
@@ -119,6 +159,8 @@ final class Config
             );
         }
 
+        self::protectDirectory($dir);
+
         $json = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         $temp = $path . '.' . getmypid() . '.tmp';
 
@@ -151,7 +193,7 @@ final class Config
     {
         return [
             'appVersion'    => APP_VERSION,
-            'schemaVersion' => SCHEMA_VERSION,
+            'schemaVersion' => Migrations::TARGET_VERSION,
             'installedAt'   => date('c'),
             'appKey'        => self::generateAppKey(),
             'baseUrl'       => '',
