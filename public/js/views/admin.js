@@ -505,7 +505,8 @@ function retentionSection(settings, readOnly) {
   const preview = el('div', {});
 
   api.retentionPreview().then((result) => {
-    clear(preview).append(
+    mount(
+      clear(preview),
       alertBox(result.notice, { type: result.clients.count > 0 ? 'warn' : 'info', title: 'If run now' }),
       el('details', {}, [
         el('summary', { text: 'What this policy does, and does not, touch' }),
@@ -592,7 +593,8 @@ function twoFactorSection(settings, readOnly) {
   const body = el('div', {}, el('p', { class: 'muted', text: 'Checking…' }));
 
   const render = (status) => {
-    clear(body).append(
+    mount(
+      clear(body),
       status.notice ? alertBox(status.notice, { type: 'warn', title: 'Required here' }) : null,
 
       status.enabled
@@ -879,7 +881,8 @@ function updatesSection(readOnly) {
 
     const how = result.how_to_apply;
 
-    body.append(
+    mount(
+      body,
       alertBox(result.summary, { type: 'warn', title: 'An update is available' }),
       el('dl', { class: 'detail-list' }, rows),
 

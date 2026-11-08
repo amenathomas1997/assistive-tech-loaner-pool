@@ -289,18 +289,35 @@ as SC 2.1.4 requires, and never fire while you are typing.
 ```
 
 Drops and recreates the test database, runs the web installer through its own
-API, then exercises the application end to end — 504 checks covering
+API, then exercises the application end to end — 583 checks covering
 authentication, RBAC, spreadsheet import, barcode encoding, the loan
 lifecycle, the request workflow, kits and accessories, agreements and
 signatures, condition photos, the waitlist, repairs, funding reporting, bulk
 actions, scheduled jobs, password reset, API keys and the guard rails.
 
-The last block of those is an API/UI contract check. It asserts that every
-field the browser dereferences off a response is actually in it, which the
-end-to-end suite does not catch: that suite greps responses for the fields
-*it* cares about, not the ones the views read. It exists because renaming a
-response field during the PHP port made saving email settings fail with
-"undefined is not an object" on a screen that had just reported success.
+The last blocks of those answer questions the end-to-end suites cannot.
+
+**The API/UI contract check** asserts that every field the browser
+dereferences off a response is actually in it. The end-to-end suite greps
+responses for the fields *it* cares about, not the ones the views read. It
+exists because renaming a response field during the PHP port made saving
+email settings fail with "undefined is not an object" on a screen that had
+just reported success.
+
+**The route-coverage check** answers the other question: not "does what we
+test work" but "what are we not testing". It records which routes the suite
+actually reaches and compares them against the live route table. The first
+time it ran, 49 of 169 routes had no test of any kind — including the list
+endpoint behind the Loans, Requests, Kits, Repairs and Programs screens. That
+is not an accident: a suite written by following a day of use exercises the
+actions and skips the reads, because a human testing by hand sees the list on
+the way past and never thinks to assert it. The build now fails if any route
+is unreached, or carries an explicit exemption with a reason.
+
+**The append check** reads the source for `target.append(x ? y : null)`. The
+DOM's own `append()` stringifies a null into the four characters "null" and
+shows them to the user, while the `el()` and `mount()` helpers filter it —
+two idioms that look identical and are not. Four call sites had it.
 
 Barcode encoders alone, with no database:
 
@@ -308,7 +325,11 @@ Barcode encoders alone, with no database:
 php scripts/verify-barcode.php
 ```
 
-Colour contrast alone, with no database or server:
+The two source checks, with no database or server:
+
+```bash
+php scripts/verify-append-safety.php
+```
 
 ```bash
 node scripts/verify-contrast.mjs

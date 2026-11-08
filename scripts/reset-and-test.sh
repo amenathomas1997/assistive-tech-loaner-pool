@@ -54,6 +54,13 @@ echo "==> Resetting database $DB_NAME"
 echo "==> Removing config so the app returns to installer mode"
 rm -f data/config.json
 
+# Every route the suite reaches is appended here by Router::dispatch(), which
+# does nothing at all unless this variable is set. Compared against the live
+# route table at the end of the run: see scripts/verify-route-coverage.php.
+ROUTE_LOG="${LP_ROUTE_LOG:-/tmp/loaner-route-coverage.log}"
+rm -f "$ROUTE_LOG"
+export LOANER_ROUTE_LOG="$ROUTE_LOG"
+
 echo "==> Starting server on port $PORT"
 # PHP's built-in server with the dev router, which mirrors what .htaccess does
 # under Apache. Single-threaded by default, so the worker count is raised:
@@ -74,6 +81,35 @@ if ! curl -sf "http://localhost:$PORT/health" > /dev/null 2>&1; then
   echo "Server did not start. Log:" >&2
   cat /tmp/loaner-test-server.log >&2
   exit 1
+fi
+
+# The two routes that exist only before setup. After the installer runs they
+# answer 410 for good, so this is the only moment either can be exercised —
+# and the installer is the one screen where a wrong response shape means
+# somebody cannot get started at all.
+echo "==> Checking the installer's own routes"
+INSTALL_CHECKS=0
+STATE=$(curl -s "http://localhost:$PORT/api/install/state")
+if printf '%s' "$STATE" | grep -q '"installed"'; then
+  echo "  ok   the installer reports whether setup has happened"
+else
+  echo "  FAIL the installer reports whether setup has happened"
+  printf '       got: %s\n' "$(printf '%s' "$STATE" | head -c 200)"
+  INSTALL_CHECKS=1
+fi
+
+# Deliberately wrong credentials: the point is that it answers with a usable
+# message rather than a stack trace, which is what somebody setting this up on
+# shared hosting will actually hit.
+DBTEST=$(curl -s -X POST "http://localhost:$PORT/api/install/test-database" \
+  -H 'Content-Type: application/json' \
+  -d '{"db_host":"127.0.0.1","db_port":3306,"db_user":"nobody","db_password":"wrong","db_name":"nothing"}')
+if printf '%s' "$DBTEST" | grep -qi 'error\|ok'; then
+  echo "  ok   the database test answers a bad password without crashing"
+else
+  echo "  FAIL the database test answers a bad password without crashing"
+  printf '       got: %s\n' "$(printf '%s' "$DBTEST" | head -c 200)"
+  INSTALL_CHECKS=1
 fi
 
 echo "==> Running the installer"
@@ -114,9 +150,29 @@ echo "==> Running third-wave suite"
 ./scripts/e2e-wave3.sh "http://localhost:$PORT"
 WAVE3_RESULT=$?
 
+# The routes the three suites above never reach. See the header of that file:
+# it exists because 49 routes had no test at all, among them the list endpoint
+# behind every screen.
+echo "==> Running route-coverage suite"
+./scripts/e2e-coverage.sh "http://localhost:$PORT"
+COVERAGE_SUITE_RESULT=$?
+
 echo "==> Checking the API/UI contract"
 ./scripts/verify-ui-contract.sh "http://localhost:$PORT"
 CONTRACT_RESULT=$?
+
+# Which routes did all of that actually reach? Answers the question the
+# suites above cannot: not "does what we test work" but "what are we not
+# testing". Runs last, because it needs every suite's requests in the log.
+echo "==> Checking API route coverage"
+php scripts/verify-route-coverage.php "$ROUTE_LOG"
+COVERAGE_RESULT=$?
+
+# Needs no server: it reads the source. The word "null" rendered to a user is
+# a defect no end-to-end suite will ever notice, because the request succeeded.
+echo "==> Checking for .append(null)"
+php scripts/verify-append-safety.php
+APPEND_RESULT=$?
 
 # Needs no server: it reads the stylesheet. Kept in this run anyway, because a
 # contrast regression is invisible to everything else here.
@@ -128,7 +184,11 @@ CONTRAST_RESULT=$?
 # a short-circuit, so the exit status of the test itself is not what escapes.
 if [ "$RESULT" -eq 0 ]; then RESULT=$FEATURE_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$WAVE3_RESULT; fi
+if [ "$RESULT" -eq 0 ]; then RESULT=$COVERAGE_SUITE_RESULT; fi
+if [ "$RESULT" -eq 0 ]; then RESULT=$INSTALL_CHECKS; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRACT_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRAST_RESULT; fi
+if [ "$RESULT" -eq 0 ]; then RESULT=$COVERAGE_RESULT; fi
+if [ "$RESULT" -eq 0 ]; then RESULT=$APPEND_RESULT; fi
 
 exit "$RESULT"

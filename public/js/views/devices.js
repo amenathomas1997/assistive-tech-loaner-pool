@@ -404,7 +404,8 @@ export async function renderDeviceDetail({ params }) {
     container.replaceWith(fresh);
   };
 
-  container.append(
+  mount(
+    container,
     el('p', { class: 'breadcrumb' }, [el('a', { href: '#/devices' }, 'Devices'), ' / ', device.name]),
 
     el('div', { class: 'page-header' }, [

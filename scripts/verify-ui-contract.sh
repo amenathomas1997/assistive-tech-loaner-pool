@@ -326,6 +326,46 @@ TFA=$(api POST /api/v1/auth/2fa/begin '{}')
 contract "auth/2fa/begin -> admin.js enrolTwoFactor()" \
   "$TFA" qr_svg secret secret_formatted steps notice
 
+# --- The lists behind the screens -----------------------------------------
+# Added after scripts/verify-route-coverage.php showed that the first request
+# every one of these screens makes had no test of any kind. The row paths
+# matter more than the top-level keys: /reports returned the key this file
+# looked for and nothing inside it was what the view read, which is how an
+# entire screen shipped broken.
+
+contract "loans -> loans.js rows" "$(api GET /api/v1/loans)" \
+  data.0.id data.0.reference data.0.status data.0.due_at data.0.device_name \
+  data.0.device_barcode data.0.client_name data.0.holder_summary \
+  data.0.is_overdue data.0.days_overdue data.0.period_name
+
+contract "loans/overdue -> dashboard.js" "$(api GET /api/v1/loans/overdue)" data meta.total
+contract "loans/due-soon -> dashboard.js" "$(api GET /api/v1/loans/due-soon)" data meta.within_days
+
+contract "requests -> requests.js rows" "$(api GET /api/v1/requests)" \
+  data.0.id data.0.reference data.0.status data.0.client_name data.0.requester_name
+
+contract "requests/meta -> requests.js" "$(api GET /api/v1/requests/meta)" delivery_modes
+
+contract "kits -> workshop.js rows" "$(api GET /api/v1/kits)" \
+  data.0.id data.0.name data.0.item_count
+
+contract "repairs -> workshop.js rows" "$(api GET /api/v1/repairs)" \
+  data.0.id data.0.reference data.0.status data.0.device_name data.0.is_open
+
+contract "repairs/meta -> workshop.js" "$(api GET /api/v1/repairs/meta)" statuses
+
+# loan_count, not total_loan_count: the Programs screen rendered
+# String(p.total_loan_count) for its "Loans ever" column, and no endpoint has
+# ever returned that field, so every row read "undefined".
+contract "programs -> directory.js rows" "$(api GET /api/v1/programs)" \
+  data.0.id data.0.name data.0.device_count data.0.active_loan_count data.0.loan_count
+
+contract "clients -> directory.js rows" "$(api GET /api/v1/clients)" \
+  data.0.id data.0.full_name data.0.loan_count data.0.active_loan_count data.0.program_name
+
+contract "devices/facets -> devices.js" "$(api GET /api/v1/devices/facets)" categories
+contract "audit/actions -> insights.js" "$(api GET /api/v1/audit/actions)" data
+
 contract "hygiene/queue -> workshop" "$(api GET /api/v1/hygiene/queue)" rows total blocking notice
 contract "sites -> workshop" "$(api GET /api/v1/sites)" data meta
 contract "transfers -> workshop" "$(api GET /api/v1/transfers)" data meta

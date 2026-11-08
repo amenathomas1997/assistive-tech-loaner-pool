@@ -4,7 +4,7 @@
 
 import { api } from '../api.js';
 import {
-  el, clear, field, dataTable, dateCell, pill, emptyState, pagination, modal,
+  el, clear, mount, field, dataTable, dateCell, pill, emptyState, pagination, modal,
   toastOk, toastError, toastWarn, announce, debounce, loadingBlock,
   alert as alertBox, formatDate, confirmDialog, withBusy,
 } from '../ui.js';
@@ -629,7 +629,8 @@ export async function renderRepairDetail({ params }) {
 
   const rerender = async () => { container.replaceWith(await renderRepairDetail({ params })); };
 
-  container.append(
+  mount(
+    container,
     el('p', { class: 'breadcrumb' }, [el('a', { href: '#/repairs' }, 'Repairs'), ' / ', repair.reference]),
 
     el('div', { class: 'page-header' }, [

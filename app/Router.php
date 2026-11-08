@@ -155,6 +155,46 @@ final class Router
             );
         }
 
+        if ($best !== null) {
+            self::recordForCoverage($best['method'], $best['pattern']);
+        }
+
         return $best;
+    }
+
+    /**
+     * Note that a route was reached, for the test suite's coverage check.
+     *
+     * This exists because an entire screen once shipped broken. GET /reports
+     * returned a shape nothing on the Reports screen could read, and no test
+     * of any kind touched that route — so the suite passed, the contract
+     * checker passed, and the first person to find out was whoever opened the
+     * screen. Counting which routes the tests actually reach is the check that
+     * would have caught it, and it is cheap.
+     *
+     * The pattern is recorded, not the path: /devices/41 and /devices/42 are
+     * one route, and a log of concrete paths would say nothing about coverage.
+     *
+     * Switched on only by an environment variable, which a request cannot set.
+     * Not a header, not a query parameter, not a setting: a production server
+     * must have no way to be talked into writing a file, and an endpoint that
+     * enumerates the route table is a reconnaissance tool. Off, this costs one
+     * getenv() per request.
+     */
+    private static function recordForCoverage(string $method, string $pattern): void
+    {
+        static $path = null;
+
+        if ($path === null) {
+            $path = getenv('LOANER_ROUTE_LOG') ?: false;
+        }
+
+        if ($path === false) {
+            return;
+        }
+
+        // LOCK_EX because the development server runs several workers, and
+        // interleaved appends from two of them would corrupt both lines.
+        @file_put_contents($path, "{$method} {$pattern}\n", FILE_APPEND | LOCK_EX);
     }
 }

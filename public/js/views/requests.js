@@ -5,7 +5,7 @@
 
 import { api } from '../api.js';
 import {
-  el, clear, field, dataTable, dateCell, pill, emptyState, pagination, modal,
+  el, clear, mount, field, dataTable, dateCell, pill, emptyState, pagination, modal,
   toastOk, toastError, announce, debounce, loadingBlock, alert as alertBox, formatDate,
 } from '../ui.js';
 import { can, navigate, session } from '../app.js';
@@ -269,7 +269,8 @@ export async function renderRequestDetail({ params }) {
   const canReview = can('requests.approve') && request.status === 'submitted';
   const canFulfil = can('requests.fulfill') && request.status === 'approved';
 
-  container.append(
+  mount(
+    container,
     el('p', { class: 'breadcrumb' }, [el('a', { href: '#/requests' }, 'Requests'), ' / ', request.reference]),
 
     el('div', { class: 'page-header' }, [

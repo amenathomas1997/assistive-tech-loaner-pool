@@ -222,7 +222,11 @@ export function modal({
       }, action.label)),
     );
 
-    dialog.append(
+    // mount(), not append(): the last argument is `actions.length ? footer
+    // : null`, and the native append() turns a null into the text "null"
+    // — so a dialog with no buttons printed the word at the bottom.
+    mount(
+      dialog,
       el('div', { class: 'modal-header' }, [
         el('h2', { id: titleId, text: title }),
         el('button', {

@@ -204,7 +204,10 @@ export async function renderPrograms() {
           { key: 'code', label: 'Code', render: (p) => p.code ? el('span', { class: 'mono' }, p.code) : '—' },
           { key: 'devices', label: 'Devices', align: 'right', render: (p) => String(p.device_count) },
           { key: 'active_loans', label: 'On loan now', align: 'right', render: (p) => String(p.active_loan_count) },
-          { key: 'total_loans', label: 'Loans ever', align: 'right', render: (p) => String(p.total_loan_count) },
+          // loan_count, not total_loan_count: no endpoint has ever returned the
+          // latter, so this column printed the word "undefined" in every row.
+          // The clients list uses loan_count for the same figure.
+          { key: 'total_loans', label: 'Loans ever', align: 'right', render: (p) => String(p.loan_count) },
           {
             key: 'status', label: 'Status',
             render: (p) => p.active
