@@ -48,7 +48,7 @@ final class Notifications
                 return ['sent' => false, 'reason' => "Unknown notification type \"{$event}\"."];
             }
 
-            return Mailer::send($actor, $organizationId, [
+            $mail = Mailer::send($actor, $organizationId, [
                 'to'        => self::recipients($organizationId, $event, $payload),
                 'subject'   => $built['subject'],
                 'html'      => $built['html'],
@@ -56,6 +56,14 @@ final class Notifications
                 'loanId'    => $payload['__loan_id'] ?? null,
                 'requestId' => $payload['__request_id'] ?? null,
             ]);
+
+            // A text as well, where the client has agreed to one and the event
+            // is time-critical. Sent alongside the email rather than instead of
+            // it: the email carries the detail, the text carries the prompt.
+            $sms = Sms::notifyClient($actor, $organizationId, $event, $payload,
+                                     self::textFor($event, $payload));
+
+            return $mail + ['sms' => $sms];
         } catch (\Throwable $e) {
             error_log("[notifications] {$event} failed: " . $e->getMessage());
             return ['sent' => false, 'reason' => $e->getMessage()];
@@ -123,6 +131,37 @@ final class Notifications
     // -----------------------------------------------------------------------
     // Templates
     // -----------------------------------------------------------------------
+
+    /**
+     * The text message version.
+     *
+     * Written to be read on a lock screen: what, when, and who it is from. No
+     * link, because a link in an unexpected text is indistinguishable from a
+     * phishing attempt and we would be teaching people to tap them.
+     */
+    private static function textFor(string $event, array $payload): string
+    {
+        $org    = Settings::organization((int) ($payload['organization_id'] ?? 0))['name'] ?? 'Your loaner pool';
+        $device = $payload['device_name'] ?? 'Your equipment';
+        $due    = self::date($payload['due_at'] ?? null);
+
+        return match ($event) {
+            'ready_for_pickup' => sprintf(
+                '%s: %s is ready to collect. Contact your counselor to arrange it.',
+                $org, $device,
+            ),
+            'due_soon' => $due === null
+                ? sprintf('%s: please arrange to return %s.', $org, $device)
+                : sprintf('%s: %s is due back on %s.', $org, $device, $due),
+            'overdue' => $due === null
+                ? sprintf('%s: %s is overdue. Please get in touch.', $org, $device)
+                : sprintf(
+                    '%s: %s was due back on %s. Please get in touch to arrange its return.',
+                    $org, $device, $due,
+                ),
+            default => '',
+        };
+    }
 
     private static function details(array $pairs): string
     {

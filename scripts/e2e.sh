@@ -19,12 +19,15 @@ fail() { printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"
 
 # check <description> <actual> <expected-substring>
 check() {
-  if printf '%s' "$2" | grep -q -- "$3"; then pass "$1"; else fail "$1" "got: $(printf '%s' "$2" | head -c 300)"; fi
+  # A here-string, not a pipe: grep -q exits at the first match, which kills
+  # printf with SIGPIPE, and pipefail then reports the whole check as failed.
+  # Harmless on a short response and silently wrong on a long one.
+  if grep -q -- "$3" <<< "$2"; then pass "$1"; else fail "$1" "got: $(printf '%s' "$2" | head -c 300)"; fi
 }
 
 # check_not <description> <actual> <substring that must NOT appear>
 check_not() {
-  if printf '%s' "$2" | grep -q -- "$3"; then fail "$1" "got: $(printf '%s' "$2" | head -c 300)"; else pass "$1"; fi
+  if grep -q -- "$3" <<< "$2"; then fail "$1" "got: $(printf '%s' "$2" | head -c 300)"; else pass "$1"; fi
 }
 
 # Read a value out of a JSON response by bracket path, e.g. jqv "['loan']['id']".

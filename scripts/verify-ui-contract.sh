@@ -206,7 +206,8 @@ contract "bulk/device-status -> devices.js" "$STATUS" changed failed_count faile
 KIT=$(api POST /api/v1/kits "{\"name\":\"Contract probe kit\",\"device_ids\":[$DEV]}")
 contract "POST kits -> workshop.js" "$KIT" kit
 KIT_ID=$(printf '%s' "$KIT" | jqv "['kit']['id']")
-printf '%s' "$KIT" | grep -q '"can_check_out"' \
+# Here-string rather than a pipe; see the note on check() in e2e.sh.
+grep -q '"can_check_out"' <<< "$KIT" \
   && pass "kit carries can_check_out" || fail "kit carries can_check_out"
 
 KITOUT=$(api POST "/api/v1/kits/$KIT_ID/checkout" "{\"client_id\":$CLIENT}")

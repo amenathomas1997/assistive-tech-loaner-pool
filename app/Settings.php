@@ -70,10 +70,47 @@ final class Settings
         // --- Reservations -----------------------------------------------------
         'reservations.enabled'    => ['boolean', true, 'reservations'],
         'reservations.hold_hours' => ['integer', 48,   'reservations'],
+
+        // --- Trial outcomes ---------------------------------------------------
+        // Prompting is on; requiring is not. An outcome entered under protest
+        // by somebody who does not know is worse than a blank, because the
+        // purchasing reports cannot tell the two apart.
+        'outcomes.enabled'          => ['boolean', true,  'outcomes'],
+        'outcomes.prompt_on_checkin' => ['boolean', true, 'outcomes'],
+        'outcomes.chase_after_days' => ['integer', 7,     'outcomes'],
+
+        // --- Hygiene ----------------------------------------------------------
+        'hygiene.enabled'            => ['boolean', false, 'hygiene'],
+        'hygiene.require_between_loans' => ['boolean', false, 'hygiene'],
+        'hygiene.default_method'     => ['string',  '',    'hygiene'],
+
+        // --- SMS (Twilio) -----------------------------------------------------
+        'sms.enabled'      => ['boolean', false, 'sms'],
+        'sms.account_sid'  => ['string',  '',    'sms'],
+        'sms.auth_token'   => ['string',  '',    'sms', true],
+        'sms.from_number'  => ['string',  '',    'sms'],
+        'sms.on_ready_for_pickup' => ['boolean', true,  'sms'],
+        'sms.on_due_soon'         => ['boolean', false, 'sms'],
+        'sms.on_overdue'          => ['boolean', true,  'sms'],
+
+        // --- Sites ------------------------------------------------------------
+        'sites.enabled' => ['boolean', false, 'sites'],
+
+        // --- Retention --------------------------------------------------------
+        // Off by default: deleting client data is not something software should
+        // start doing because nobody changed a setting.
+        'retention.enabled'            => ['boolean', false, 'retention'],
+        'retention.client_years'       => ['integer', 7,     'retention'],
+        'retention.audit_years'        => ['integer', 7,     'retention'],
+        'retention.email_log_days'     => ['integer', 365,   'retention'],
+
+        // --- Two-factor -------------------------------------------------------
+        'security.require_2fa_for_admins' => ['boolean', false, 'security'],
     ];
 
     public const GROUPS = [
         'email', 'notifications', 'loans', 'scanning', 'agreements', 'photos', 'reservations',
+        'outcomes', 'hygiene', 'sms', 'sites', 'retention', 'security',
     ];
 
     /** @var array<int, array<string, mixed>> */

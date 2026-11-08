@@ -244,6 +244,74 @@ final class Csv
     ];
 
     /**
+     * Client fields that can come from a spreadsheet.
+     *
+     * A device import and a client import are the same problem, so they share
+     * the parser, the mapping screen and the two-phase commit. The asymmetry of
+     * being able to import 900 devices and having to type 400 clients is how a
+     * system like this quietly fails to get adopted.
+     */
+    public const CLIENT_ALIASES = [
+        'external_ref' => ['external_ref', 'reference', 'client_id', 'client_ref', 'id_number',
+                           'participant_id', 'consumer_id'],
+        'case_number'  => ['case_number', 'case', 'case_no', 'authorization', 'auth_number', 'vr_case'],
+        'first_name'   => ['first_name', 'first', 'forename', 'given_name', 'firstname'],
+        'last_name'    => ['last_name', 'last', 'surname', 'family_name', 'lastname'],
+        'email'        => ['email', 'email_address', 'e_mail'],
+        'phone'        => ['phone', 'telephone', 'phone_number', 'home_phone', 'contact_number'],
+        'mobile'       => ['mobile', 'cell', 'cell_phone', 'mobile_number', 'text_number'],
+        'counselor'    => ['counselor', 'counsellor', 'vrc', 'case_manager', 'counselor_name',
+                           'counselor_email'],
+        'program'      => ['program', 'programme', 'activity', 'service'],
+        'notes'        => ['notes', 'note', 'comments', 'remarks'],
+    ];
+
+    /** Propose a header -> client field mapping, same contract as devices. */
+    public static function suggestClientMapping(array $headers): array
+    {
+        return self::suggestFrom($headers, self::CLIENT_ALIASES);
+    }
+
+    /** @return array{mapping: array<string,string>, unmapped: list<string>} */
+    private static function suggestFrom(array $headers, array $aliases): array
+    {
+        $mapping = [];
+        $used    = [];
+
+        foreach ($aliases as $field => $names) {
+            foreach ($headers as $header) {
+                if (in_array($header, $names, true) && !in_array($header, $used, true)) {
+                    $mapping[$header] = $field;
+                    $used[]           = $header;
+                    break;
+                }
+            }
+        }
+
+        $unmapped = array_values(array_filter(
+            $headers,
+            static fn (string $h): bool => !in_array($h, $used, true) && $h !== '__line',
+        ));
+
+        return ['mapping' => $mapping, 'unmapped' => $unmapped];
+    }
+
+    /** A starter spreadsheet for clients. */
+    public static function clientTemplate(): string
+    {
+        return Util::toCsv(
+            ['external_ref', 'case_number', 'first_name', 'last_name', 'email', 'phone',
+             'mobile', 'counselor', 'program', 'notes'],
+            [
+                ['VR-1001', 'C-55012', 'Jordan', 'Rivera', 'jordan@example.org', '555-0100',
+                 '555-0101', 'val@example.org', 'LEAP', 'Prefers large print'],
+                ['VR-1002', 'C-55013', 'Sam', 'Okafor', '', '555-0102',
+                 '', 'Val Counselor', 'Retreat', ''],
+            ],
+        );
+    }
+
+    /**
      * A starter spreadsheet.
      *
      * Includes two filled example rows rather than headers alone: the commonest
@@ -284,25 +352,7 @@ final class Csv
      */
     public static function suggestMapping(array $headers): array
     {
-        $mapping = [];
-        $used    = [];
-
-        foreach (self::DEVICE_ALIASES as $field => $aliases) {
-            foreach ($headers as $header) {
-                if (in_array($header, $aliases, true) && !in_array($header, $used, true)) {
-                    $mapping[$header] = $field;
-                    $used[]           = $header;
-                    break;
-                }
-            }
-        }
-
-        $unmapped = array_values(array_filter(
-            $headers,
-            static fn (string $h): bool => !in_array($h, $used, true) && $h !== '__line',
-        ));
-
-        return ['mapping' => $mapping, 'unmapped' => $unmapped];
+        return self::suggestFrom($headers, self::DEVICE_ALIASES);
     }
 
     /** Normalise the many ways a spreadsheet writes a status into our enum. */

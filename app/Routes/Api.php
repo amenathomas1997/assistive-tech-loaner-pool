@@ -34,5 +34,8 @@ final class Api
         WorkshopRoutes::register($router);
         InsightsRoutes::register($router);
         AdminRoutes::register($router);
+
+        OutcomeRoutes::register($router);
+        SecurityRoutes::register($router);
     }
 }

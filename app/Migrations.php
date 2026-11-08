@@ -19,7 +19,7 @@ namespace Loaner;
 final class Migrations
 {
     /** Highest version this build knows about. */
-    public const TARGET_VERSION = 3;
+    public const TARGET_VERSION = 4;
 
     // -----------------------------------------------------------------------
     // Idempotent DDL helpers
@@ -360,6 +360,212 @@ final class Migrations
                     // actually listening — without it, a phone scanning into a
                     // closed station looks exactly like one that is working.
                     self::addColumn('scan_channels', 'last_poll_at', 'DATETIME DEFAULT NULL', $log);
+                },
+            ],
+            [
+                'version' => 4,
+                'name'    => 'Outcomes, licences, sites, hygiene, retention and two-factor',
+                'up'      => static function (array &$log): void {
+                    // --- Trial outcomes --------------------------------------
+                    // The reason a loaner pool exists. Everything else records
+                    // that a device went out and came back; this records
+                    // whether it worked, which is the question the loan was
+                    // asked to answer and the one a purchase decision needs.
+                    self::addColumn('loans', 'outcome',
+                        'ENUM("recommended","not_suitable","needs_training","trying_alternative",'
+                        . '"client_declined","inconclusive") DEFAULT NULL', $log);
+                    self::addColumn('loans', 'outcome_notes', 'TEXT', $log);
+                    self::addColumn('loans', 'outcome_recorded_at', 'DATETIME DEFAULT NULL', $log);
+                    self::addColumn('loans', 'outcome_recorded_by', 'INT UNSIGNED DEFAULT NULL', $log);
+                    self::addIndex('loans', 'idx_loan_outcome',
+                        'KEY idx_loan_outcome (organization_id, outcome)', $log);
+
+                    // --- Authorisation ---------------------------------------
+                    // Equipment goes out against a VR authorisation. Without
+                    // the reference on the loan there is no way to tie what was
+                    // lent back to the case that paid for it.
+                    self::addColumn('loans', 'authorization_ref', 'VARCHAR(64) DEFAULT NULL', $log);
+                    self::addColumn('loan_requests', 'authorization_ref', 'VARCHAR(64) DEFAULT NULL', $log);
+                    self::addColumn('clients', 'case_number', 'VARCHAR(64) DEFAULT NULL', $log);
+
+                    // --- Shipping --------------------------------------------
+                    // "In transit" is a state the request tracker already has;
+                    // these are the facts somebody rings up to ask for.
+                    self::addColumn('loans', 'out_carrier', 'VARCHAR(64) DEFAULT NULL', $log);
+                    self::addColumn('loans', 'out_tracking', 'VARCHAR(120) DEFAULT NULL', $log);
+                    self::addColumn('loans', 'out_shipped_at', 'DATETIME DEFAULT NULL', $log);
+                    self::addColumn('loans', 'return_carrier', 'VARCHAR(64) DEFAULT NULL', $log);
+                    self::addColumn('loans', 'return_tracking', 'VARCHAR(120) DEFAULT NULL', $log);
+                    self::addColumn('loans', 'return_shipped_at', 'DATETIME DEFAULT NULL', $log);
+
+                    // --- Licences and consumables ----------------------------
+                    // A JAWS licence is not one object with one holder: it is a
+                    // number of seats. Modelled on devices rather than in a
+                    // table of its own because it is lent, returned, reported
+                    // on and searched for in exactly the same ways.
+                    self::addColumn('devices', 'item_type',
+                        'ENUM("device","licence","consumable") NOT NULL DEFAULT "device"', $log);
+                    self::addColumn('devices', 'seats_total', 'INT UNSIGNED NOT NULL DEFAULT 1', $log);
+                    self::addColumn('devices', 'licence_key', 'VARCHAR(255) DEFAULT NULL', $log);
+                    self::addColumn('devices', 'licence_expires', 'DATE DEFAULT NULL', $log);
+                    self::addIndex('devices', 'idx_device_type',
+                        'KEY idx_device_type (organization_id, item_type)', $log);
+
+                    // --- Disposal --------------------------------------------
+                    // Funders ask what became of equipment they paid for, and
+                    // "retired" on its own is not an answer.
+                    self::addColumn('devices', 'disposed_at', 'DATETIME DEFAULT NULL', $log);
+                    self::addColumn('devices', 'disposal_method',
+                        'ENUM("transferred","donated","recycled","destroyed","sold","lost","returned_to_funder")'
+                        . ' DEFAULT NULL', $log);
+                    self::addColumn('devices', 'disposal_ref', 'VARCHAR(120) DEFAULT NULL', $log);
+                    self::addColumn('devices', 'disposal_notes', 'TEXT', $log);
+                    self::addColumn('devices', 'disposed_by', 'INT UNSIGNED DEFAULT NULL', $log);
+
+                    // --- Sites -----------------------------------------------
+                    // A state agency holds stock in regional offices. location
+                    // was free text, which cannot answer "what is in Tulsa?".
+                    self::createTable('sites', '
+                        id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        organization_id INT UNSIGNED NOT NULL,
+                        name            VARCHAR(190) NOT NULL,
+                        code            VARCHAR(32)  DEFAULT NULL,
+                        address         TEXT,
+                        contact_email   VARCHAR(190) DEFAULT NULL,
+                        phone           VARCHAR(40)  DEFAULT NULL,
+                        active          TINYINT(1)   NOT NULL DEFAULT 1,
+                        created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uq_site_code (organization_id, code),
+                        CONSTRAINT fk_sites_org FOREIGN KEY (organization_id)
+                          REFERENCES organizations (id) ON DELETE CASCADE
+                    ', $log);
+
+                    self::addColumn('devices', 'site_id', 'INT UNSIGNED DEFAULT NULL', $log);
+                    self::addColumn('users', 'site_id', 'INT UNSIGNED DEFAULT NULL', $log);
+                    self::addIndex('devices', 'idx_device_site',
+                        'KEY idx_device_site (organization_id, site_id)', $log);
+
+                    // Equipment moving between offices is its own journey, with
+                    // its own tracking number and its own way of going missing.
+                    self::createTable('device_transfers', '
+                        id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        organization_id INT UNSIGNED NOT NULL,
+                        reference       VARCHAR(24)  NOT NULL,
+                        device_id       INT UNSIGNED NOT NULL,
+                        from_site_id    INT UNSIGNED DEFAULT NULL,
+                        to_site_id      INT UNSIGNED NOT NULL,
+                        status          ENUM("pending","in_transit","received","cancelled")
+                                          NOT NULL DEFAULT "pending",
+                        carrier         VARCHAR(64)  DEFAULT NULL,
+                        tracking        VARCHAR(120) DEFAULT NULL,
+                        sent_at         DATETIME     DEFAULT NULL,
+                        received_at     DATETIME     DEFAULT NULL,
+                        sent_by         INT UNSIGNED DEFAULT NULL,
+                        received_by     INT UNSIGNED DEFAULT NULL,
+                        notes           TEXT,
+                        created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        UNIQUE KEY uq_transfer_ref (reference),
+                        KEY idx_transfer_device (device_id, status),
+                        CONSTRAINT fk_transfer_org FOREIGN KEY (organization_id)
+                          REFERENCES organizations (id) ON DELETE CASCADE,
+                        CONSTRAINT fk_transfer_device FOREIGN KEY (device_id)
+                          REFERENCES devices (id) ON DELETE CASCADE
+                    ', $log);
+
+                    // --- Hygiene ---------------------------------------------
+                    // Shared equipment that touches ears, mouths and hands is
+                    // cleaned between users. Recorded because "was it cleaned?"
+                    // is asked after the fact, by someone who was not there.
+                    self::createTable('sanitisation_events', '
+                        id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        organization_id INT UNSIGNED NOT NULL,
+                        device_id       INT UNSIGNED NOT NULL,
+                        loan_id         INT UNSIGNED DEFAULT NULL,
+                        method          VARCHAR(120) DEFAULT NULL,
+                        notes           TEXT,
+                        cleaned_by      INT UNSIGNED DEFAULT NULL,
+                        cleaned_at      DATETIME     NOT NULL,
+                        created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        KEY idx_sanitisation_device (device_id, cleaned_at),
+                        CONSTRAINT fk_sanitise_org FOREIGN KEY (organization_id)
+                          REFERENCES organizations (id) ON DELETE CASCADE,
+                        CONSTRAINT fk_sanitise_device FOREIGN KEY (device_id)
+                          REFERENCES devices (id) ON DELETE CASCADE
+                    ', $log);
+
+                    self::addColumn('devices', 'last_cleaned_at', 'DATETIME DEFAULT NULL', $log);
+                    self::addColumn('devices', 'needs_cleaning', 'TINYINT(1) NOT NULL DEFAULT 0', $log);
+
+                    // --- SMS and consent -------------------------------------
+                    // A text reaches people an email does not. Opt-in is stored
+                    // per client because consent to be texted is not implied by
+                    // having given someone a mobile number.
+                    self::addColumn('clients', 'mobile', 'VARCHAR(40) DEFAULT NULL', $log);
+                    self::addColumn('clients', 'sms_opt_in', 'TINYINT(1) NOT NULL DEFAULT 0', $log);
+
+                    self::createTable('sms_log', '
+                        id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        organization_id INT UNSIGNED NOT NULL,
+                        event_type      VARCHAR(48)  NOT NULL,
+                        recipient       VARCHAR(40)  NOT NULL,
+                        body            VARCHAR(500) NOT NULL,
+                        loan_id         INT UNSIGNED DEFAULT NULL,
+                        status          ENUM("sent","failed","skipped") NOT NULL DEFAULT "sent",
+                        error_message   TEXT,
+                        provider_ref    VARCHAR(120) DEFAULT NULL,
+                        sent_at         DATETIME     DEFAULT NULL,
+                        created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        KEY idx_sms_org (organization_id, created_at),
+                        CONSTRAINT fk_sms_org FOREIGN KEY (organization_id)
+                          REFERENCES organizations (id) ON DELETE CASCADE
+                    ', $log);
+
+                    // --- Retention -------------------------------------------
+                    // Client records are anonymised rather than deleted: loans
+                    // reference them, and destroying the row would rewrite the
+                    // history of who held what. The identifying fields go; the
+                    // shape of the activity stays.
+                    self::addColumn('clients', 'anonymised_at', 'DATETIME DEFAULT NULL', $log);
+
+                    // --- Two-factor ------------------------------------------
+                    // An administrator account reaches every client record in
+                    // the agency. The secret is encrypted at rest with the same
+                    // key as the Graph credentials.
+                    self::addColumn('users', 'totp_secret', 'VARCHAR(255) DEFAULT NULL', $log);
+                    self::addColumn('users', 'totp_enabled', 'TINYINT(1) NOT NULL DEFAULT 0', $log);
+                    self::addColumn('users', 'totp_confirmed_at', 'DATETIME DEFAULT NULL', $log);
+
+                    self::createTable('totp_recovery_codes', '
+                        id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                        user_id    INT UNSIGNED NOT NULL,
+                        code_hash  CHAR(64)     NOT NULL,
+                        used_at    DATETIME     DEFAULT NULL,
+                        created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        KEY idx_recovery_user (user_id, used_at),
+                        CONSTRAINT fk_recovery_user FOREIGN KEY (user_id)
+                          REFERENCES users (id) ON DELETE CASCADE
+                    ', $log);
+
+                    // A half-finished sign-in: password accepted, code not yet
+                    // given. Kept server-side so the browser cannot skip it.
+                    self::createTable('pending_logins', '
+                        id         CHAR(64)     NOT NULL,
+                        user_id    INT UNSIGNED NOT NULL,
+                        ip         VARCHAR(64)  DEFAULT NULL,
+                        user_agent VARCHAR(255) DEFAULT NULL,
+                        attempts   INT UNSIGNED NOT NULL DEFAULT 0,
+                        expires_at DATETIME     NOT NULL,
+                        created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        KEY idx_pending_user (user_id),
+                        CONSTRAINT fk_pending_user FOREIGN KEY (user_id)
+                          REFERENCES users (id) ON DELETE CASCADE
+                    ', $log);
                 },
             ],
         ];

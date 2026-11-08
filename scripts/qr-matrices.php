@@ -42,6 +42,23 @@ for ($i = 0; $i < 40; $i++) {
 $cases[] = 'https://loanerpool.example.com/scanner.html?code=7K3F9Q';
 $cases[] = 'https://a-very-long-subdomain.example-organisation.org/scanner.html?code=ABCDEF';
 
+// A realistic two-factor enrolment URI, which is the longest thing this
+// encoder is asked to carry and the reason versions 7-10 exist.
+$cases[] = Totp::provisioningUri(
+    Totp::generateSecret(),
+    'administrator@example.org',
+    'Assistive Technology Loaner Pool',
+);
+
+// One per version boundary, so a mistake in a single version's block layout
+// or alignment pattern shows up as that version failing rather than as a
+// vague "QR is broken".
+foreach ([15, 40, 70, 100, 130, 160, 200, 230] as $length) {
+    if ($length <= Qr::maxLength()) {
+        $cases[] = str_repeat('Q', $length);
+    }
+}
+
 // Boundary: exactly the maximum the encoder accepts.
 $cases[] = str_repeat('A', Qr::maxLength());
 

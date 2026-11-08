@@ -38,6 +38,30 @@ final class Audit
     public const LOAN_REDUCED     = 'loan.reduced';
     public const LOAN_CANCELLED   = 'loan.cancelled';
     public const LOAN_TRANSFERRED = 'loan.transferred';
+    public const LOAN_OUTCOME_RECORDED = 'loan.outcome_recorded';
+    public const LOAN_SHIPPED     = 'loan.shipped';
+
+    public const DEVICE_SANITISED = 'device.sanitised';
+    public const DEVICE_DISPOSED  = 'device.disposed';
+    public const DEVICE_TRANSFERRED = 'device.transferred';
+
+    public const CLIENT_IMPORTED   = 'client.imported';
+    public const CLIENT_ANONYMISED = 'client.anonymised';
+
+    public const SITE_CREATED = 'site.created';
+    public const SITE_UPDATED = 'site.updated';
+
+    public const SMS_SENT   = 'sms.sent';
+    public const SMS_FAILED = 'sms.failed';
+
+    public const BACKUP_DOWNLOADED = 'backup.downloaded';
+
+    public const TWOFACTOR_ENABLED  = 'auth.twofactor_enabled';
+    public const TWOFACTOR_DISABLED = 'auth.twofactor_disabled';
+    public const TWOFACTOR_FAILED   = 'auth.twofactor_failed';
+    public const TWOFACTOR_RECOVERY_USED = 'auth.twofactor_recovery_used';
+
+    public const RETENTION_PURGE = 'retention.purge';
 
     public const REQUEST_SUBMITTED     = 'request.submitted';
     public const REQUEST_APPROVED      = 'request.approved';

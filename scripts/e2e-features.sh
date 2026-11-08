@@ -19,10 +19,12 @@ pass() { printf '  ok   %s\n' "$1"; }
 fail() { printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; FAILURES=$((FAILURES + 1)); }
 
 check() {
-  if printf '%s' "$2" | grep -q -- "$3"; then pass "$1"; else fail "$1" "got: $(printf '%s' "$2" | head -c 280)"; fi
+  # See the note in e2e.sh: a pipe plus grep -q plus pipefail reports a
+  # false failure on any response large enough that printf is still writing.
+  if grep -q -- "$3" <<< "$2"; then pass "$1"; else fail "$1" "got: $(printf '%s' "$2" | head -c 280)"; fi
 }
 check_not() {
-  if printf '%s' "$2" | grep -q -- "$3"; then fail "$1" "got: $(printf '%s' "$2" | head -c 280)"; else pass "$1"; fi
+  if grep -q -- "$3" <<< "$2"; then fail "$1" "got: $(printf '%s' "$2" | head -c 280)"; else pass "$1"; fi
 }
 
 jqv() {

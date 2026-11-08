@@ -147,6 +147,15 @@ final class DeviceRoutes
             'funding_source'   => Util::boundedStr($body['funding_source'] ?? $body['fundingSource'] ?? null,
                 'funding_source', 120),
             'notes'            => Util::str($body['notes'] ?? null),
+            'item_type'        => Util::oneOf($body['item_type'] ?? $body['itemType'] ?? 'device',
+                Devices::ITEM_TYPES, 'item_type', true),
+            'seats_total'      => Util::int($body['seats_total'] ?? $body['seatsTotal'] ?? 1,
+                'seats_total', 1, 10000) ?? 1,
+            'licence_key'      => Util::str($body['licence_key'] ?? $body['licenceKey'] ?? null, 255),
+            'licence_expires'  => empty($body['licence_expires'] ?? $body['licenceExpires'] ?? null)
+                ? null
+                : Util::dateOnly($body['licence_expires'] ?? $body['licenceExpires'], 'licence_expires'),
+            'site_id'          => $body['site_id'] ?? $body['siteId'] ?? null,
         ];
 
         $organization = Settings::organization($organizationId);

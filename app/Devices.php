@@ -17,6 +17,22 @@ final class Devices
 {
     public const STATUSES = ['available', 'checked_out', 'reserved', 'maintenance', 'retired', 'lost'];
 
+    /**
+     * What kind of thing this row is.
+     *
+     * A device is one object with one holder. A licence is a number of seats.
+     * A consumable goes out and does not come back. All three are lent,
+     * searched for and reported on identically, which is why they share a
+     * table rather than having three of them.
+     */
+    public const ITEM_TYPES = ['device', 'licence', 'consumable'];
+
+    public const ITEM_TYPE_LABELS = [
+        'device'     => 'Equipment — one item, one holder',
+        'licence'    => 'Software licence — several seats',
+        'consumable' => 'Consumable — issued, not returned',
+    ];
+
     private const MAX_IMPORT_ROWS = 20000;
 
     /** Columns an import may write. */
@@ -29,6 +45,9 @@ final class Devices
     private const SELECT = '
         SELECT d.*,
                p.name AS program_name,
+               st.name AS site_name,
+               (SELECT COUNT(*) FROM loans sl WHERE sl.device_id = d.id AND sl.status = "active")
+                   AS seats_in_use,
                l.id AS active_loan_id, l.reference AS active_loan_reference,
                l.due_at AS active_loan_due_at, l.checked_out_at AS active_loan_checked_out_at,
                t.full_name AS active_loan_tech_name,
@@ -36,6 +55,7 @@ final class Devices
                lp.name AS active_loan_program_name
           FROM devices d
           LEFT JOIN programs p ON p.id = d.owner_program_id
+          LEFT JOIN sites st ON st.id = d.site_id
           LEFT JOIN loans l ON l.device_id = d.id AND l.status = "active"
           LEFT JOIN users t ON t.id = l.tech_id
           LEFT JOIN clients c ON c.id = l.client_id
@@ -72,7 +92,21 @@ final class Devices
             ? (json_decode((string) $row['custom_fields'], true) ?: null)
             : null;
 
-        $row['is_available']   = $row['status'] === 'available' && empty($row['active_loan_id']);
+        $row['item_type']       = $row['item_type'] ?? 'device';
+        $row['item_type_label']  = self::ITEM_TYPE_LABELS[$row['item_type']] ?? $row['item_type'];
+        $row['seats_total']      = max(1, (int) ($row['seats_total'] ?? 1));
+
+        // Worked out here so no screen has to do its own arithmetic and get a
+        // different answer.
+        $row['seats_in_use'] = (int) ($row['seats_in_use'] ?? 0);
+        $row['seats_free']   = max(0, $row['seats_total'] - $row['seats_in_use']);
+
+        $row['is_available'] = $row['seats_total'] > 1
+            ? ($row['seats_free'] > 0 && !in_array($row['status'], ['retired', 'lost', 'maintenance'], true))
+            : ($row['status'] === 'available' && empty($row['active_loan_id']));
+
+        $row['licence_expired'] = !empty($row['licence_expires'])
+            && strtotime((string) $row['licence_expires']) < strtotime('today');
         $row['current_holder'] = $holder === [] ? null : implode(' / ', $holder);
         $row['is_overdue']     = !empty($row['active_loan_id'])
                               && !empty($row['active_loan_due_at'])
@@ -173,12 +207,29 @@ final class Devices
                 $barcodePrefix,
             );
 
+        $itemType = $data['item_type'] ?? 'device';
+
+        if (!in_array($itemType, self::ITEM_TYPES, true)) {
+            throw Util::badRequest(
+                "\"{$itemType}\" is not a kind of item.",
+                ['field' => 'item_type', 'allowed' => self::ITEM_TYPES],
+            );
+        }
+
+        // Seats only mean something for a licence. A physical device with
+        // twelve seats would be a claim that twelve people can hold the same
+        // object, so the value is pinned to 1 rather than trusted.
+        $seats = $itemType === 'licence'
+            ? max(1, (int) ($data['seats_total'] ?? 1))
+            : 1;
+
         $id = Db::insert(
             'INSERT INTO devices
                (organization_id, barcode, asset_tag, serial_number, name, category, manufacturer, model,
                 description, status, condition_note, location, home_location, owner_program_id,
-                purchase_date, purchase_cost, warranty_expires, funding_source, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                purchase_date, purchase_cost, warranty_expires, funding_source, notes,
+                item_type, seats_total, licence_key, licence_expires, site_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 $organizationId, $barcode, $data['asset_tag'] ?? null, $data['serial_number'] ?? null,
                 $data['name'], $data['category'] ?? null, $data['manufacturer'] ?? null,
@@ -187,6 +238,8 @@ final class Devices
                 $data['owner_program_id'] ?? null, $data['purchase_date'] ?? null,
                 $data['purchase_cost'] ?? null, $data['warranty_expires'] ?? null,
                 $data['funding_source'] ?? null, $data['notes'] ?? null,
+                $itemType, $seats, $data['licence_key'] ?? null,
+                $data['licence_expires'] ?? null, $data['site_id'] ?? null,
             ],
         );
 
@@ -203,12 +256,42 @@ final class Devices
         return self::get($organizationId, $id);
     }
 
+    /**
+     * Seats cannot be cut below the number currently in use.
+     *
+     * Allowing it would show "20 of 12 seats in use", and the next person to
+     * look would not know which number was wrong.
+     */
+    private static function validateSeats(int $organizationId, int $deviceId, mixed $value): int
+    {
+        $seats = Util::int($value, 'seats_total', 1, 10000) ?? 1;
+
+        $inUse = (int) Db::value(
+            'SELECT COUNT(*) FROM loans WHERE device_id = ? AND status = "active"',
+            [$deviceId],
+        );
+
+        if ($seats < $inUse) {
+            throw Util::conflict(
+                sprintf(
+                    '%d seat(s) are in use right now, so the total cannot be set below that. Check '
+                    . 'some in first, or raise the number.',
+                    $inUse,
+                ),
+                ['field' => 'seats_total', 'seats_in_use' => $inUse],
+            );
+        }
+
+        return $seats;
+    }
+
     /** Fields an edit may change. Barcode is deliberately not among them. */
     private const EDITABLE = [
         'asset_tag', 'serial_number', 'name', 'category', 'manufacturer', 'model',
         'description', 'status', 'condition_note', 'location', 'home_location',
         'owner_program_id', 'purchase_date', 'purchase_cost', 'warranty_expires',
         'funding_source', 'notes',
+        'item_type', 'seats_total', 'licence_key', 'licence_expires', 'site_id',
     ];
 
     /**
@@ -250,7 +333,15 @@ final class Devices
                 'purchase_cost'    => $value === null || $value === '' ? null : Util::decimal($value, 'purchase_cost'),
                 'purchase_date',
                 'warranty_expires' => $value === null || $value === '' ? null : Util::dateOnly($value, $column),
-                'owner_program_id' => $value ?: null,
+                'owner_program_id',
+                'site_id'          => $value ?: null,
+                'item_type'        => Util::oneOf($value, self::ITEM_TYPES, 'item_type', true),
+                // Seats cannot drop below what is already out: the holders of
+                // those seats exist, and the number would then be a lie.
+                'seats_total'      => self::validateSeats($organizationId, $deviceId, $value),
+                'licence_key'      => Util::str($value, 255),
+                'licence_expires'  => $value === null || $value === ''
+                    ? null : Util::dateOnly($value, 'licence_expires'),
                 'asset_tag'        => Util::boundedStr($value, 'asset_tag', 64) ?: null,
                 'serial_number'    => Util::boundedStr($value, 'serial_number', 128) ?: null,
                 'category'         => Util::boundedStr($value, 'category', 96),
@@ -385,6 +476,190 @@ final class Devices
         ]);
 
         return ['deleted' => true, 'device' => $device];
+    }
+
+    public const DISPOSAL_METHODS = [
+        'transferred', 'donated', 'recycled', 'destroyed', 'sold', 'lost', 'returned_to_funder',
+    ];
+
+    public const DISPOSAL_LABELS = [
+        'transferred'        => 'Transferred to another agency',
+        'donated'            => 'Donated',
+        'recycled'           => 'Recycled or e-wasted',
+        'destroyed'          => 'Destroyed',
+        'sold'               => 'Sold',
+        'lost'               => 'Lost or stolen',
+        'returned_to_funder' => 'Returned to the funder',
+    ];
+
+    /**
+     * Record what became of a device.
+     *
+     * "Retired" on its own is not an answer to the question a funder asks
+     * about equipment they paid for. This is the answer: what happened, when,
+     * who decided, and any reference number — a disposal certificate, a
+     * transfer agreement, a police report.
+     */
+    public static function dispose(?array $actor, array $input): array
+    {
+        $organizationId = (int) $input['organizationId'];
+        $deviceId       = (int) $input['deviceId'];
+        $method         = (string) ($input['method'] ?? '');
+
+        if (!in_array($method, self::DISPOSAL_METHODS, true)) {
+            throw Util::badRequest(
+                'Choose what happened to the device.',
+                ['field' => 'method', 'allowed' => self::DISPOSAL_METHODS],
+            );
+        }
+
+        $device = self::get($organizationId, $deviceId);
+        if ($device === null) {
+            throw Util::notFound('That device does not exist.');
+        }
+
+        if (!empty($device['active_loan_id'])) {
+            throw Util::conflict(
+                "{$device['name']} is out on loan ({$device['active_loan_reference']}). It cannot be "
+                . 'disposed of while somebody has it — unless it is lost, in which case check it in '
+                . 'as lost first.',
+                ['loan_reference' => $device['active_loan_reference']],
+            );
+        }
+
+        if (!empty($device['disposed_at'])) {
+            throw Util::conflict(
+                sprintf(
+                    '%s was already disposed of on %s (%s).',
+                    $device['name'], date('j M Y', strtotime((string) $device['disposed_at'])),
+                    self::DISPOSAL_LABELS[$device['disposal_method']] ?? $device['disposal_method'],
+                ),
+            );
+        }
+
+        // Funded equipment leaving the pool is exactly what a grant report
+        // asks about, so an unexplained disposal of something expensive is
+        // refused rather than quietly recorded.
+        $notes = Util::str($input['notes'] ?? null);
+
+        if ($method === 'lost' && ($notes === null || mb_strlen($notes) < 3)) {
+            throw Util::badRequest(
+                'Say what happened. A device recorded as lost with no explanation is the first thing '
+                . 'an auditor asks about.',
+                ['field' => 'notes'],
+            );
+        }
+
+        Db::execute(
+            'UPDATE devices
+                SET status = ?, disposed_at = ?, disposal_method = ?, disposal_ref = ?,
+                    disposal_notes = ?, disposed_by = ?, updated_at = NOW()
+              WHERE id = ? AND organization_id = ?',
+            [
+                $method === 'lost' ? 'lost' : 'retired',
+                Util::mysqlDateTime($input['disposedAt'] ?? 'now'),
+                $method,
+                Util::boundedStr($input['reference'] ?? null, 'reference', 120),
+                $notes,
+                $input['actorId'] ?? null,
+                $deviceId, $organizationId,
+            ],
+        );
+
+        Audit::record($actor, [
+            'organizationId' => $organizationId,
+            'action'         => Audit::DEVICE_DISPOSED,
+            'entityType'     => 'device',
+            'entityId'       => $deviceId,
+            'entityLabel'    => $device['name'],
+            'summary'        => sprintf(
+                '%s (%s) disposed of: %s%s',
+                $device['name'], $device['barcode'],
+                self::DISPOSAL_LABELS[$method],
+                $notes !== null ? " — {$notes}" : '',
+            ),
+            'detail' => [
+                'method'         => $method,
+                'reference'      => $input['reference'] ?? null,
+                'purchase_cost'  => $device['purchase_cost'],
+                'funding_source' => $device['funding_source'],
+            ],
+        ]);
+
+        return self::get($organizationId, $deviceId);
+    }
+
+    /**
+     * Everything that has left the pool, for a funder's asset report.
+     *
+     * Grouped by funding source because that is who asks.
+     */
+    public static function disposalReport(int $organizationId, ?string $from = null, ?string $to = null): array
+    {
+        $fromSql = Util::mysqlDateTime($from ?: '-1 year');
+        $toSql   = Util::mysqlDateTime($to ?: 'now');
+
+        $rows = Db::all(
+            'SELECT d.id, d.name, d.barcode, d.asset_tag, d.serial_number, d.category,
+                    d.purchase_date, d.purchase_cost, d.funding_source,
+                    d.disposed_at, d.disposal_method, d.disposal_ref, d.disposal_notes,
+                    u.full_name AS disposed_by_name,
+                    (SELECT COUNT(*) FROM loans l WHERE l.device_id = d.id) AS lifetime_loans
+               FROM devices d
+               LEFT JOIN users u ON u.id = d.disposed_by
+              WHERE d.organization_id = ? AND d.disposed_at IS NOT NULL
+                AND d.disposed_at >= ? AND d.disposed_at <= ?
+              ORDER BY d.disposed_at DESC',
+            [$organizationId, $fromSql, $toSql],
+        );
+
+        $byFunder = [];
+        $byMethod = [];
+
+        foreach ($rows as &$row) {
+            $row['lifetime_loans']  = (int) $row['lifetime_loans'];
+            $row['disposal_label']  = self::DISPOSAL_LABELS[$row['disposal_method']]
+                ?? $row['disposal_method'];
+
+            // Service life is the number that tells a funder whether the
+            // equipment lasted as long as it was meant to.
+            $row['years_in_service'] = empty($row['purchase_date'])
+                ? null
+                : round(
+                    (strtotime((string) $row['disposed_at']) - strtotime((string) $row['purchase_date']))
+                    / 31557600, 1,
+                );
+
+            $funder = $row['funding_source'] ?: 'Unattributed';
+            $byFunder[$funder]['count'] = ($byFunder[$funder]['count'] ?? 0) + 1;
+            $byFunder[$funder]['value'] = ($byFunder[$funder]['value'] ?? 0)
+                + (float) ($row['purchase_cost'] ?? 0);
+
+            $byMethod[$row['disposal_method']] = ($byMethod[$row['disposal_method']] ?? 0) + 1;
+        }
+        unset($row);
+
+        $funders = [];
+        foreach ($byFunder as $name => $totals) {
+            $funders[] = [
+                'funding_source' => $name,
+                'count'          => $totals['count'],
+                'original_value' => round($totals['value'], 2),
+            ];
+        }
+        usort($funders, static fn ($a, $b) => $b['original_value'] <=> $a['original_value']);
+
+        return [
+            'range'     => ['from' => $fromSql, 'to' => $toSql],
+            'rows'      => $rows,
+            'total'     => count($rows),
+            'by_funder' => $funders,
+            'by_method' => $byMethod,
+            'original_value' => round(array_sum(array_column($funders, 'original_value')), 2),
+            'caveat'    => 'Values are what this pool paid, not what the equipment was worth when it '
+                         . 'left. They are for reconciling against a purchase record, not for '
+                         . 'claiming a loss.',
+        ];
     }
 
     /**

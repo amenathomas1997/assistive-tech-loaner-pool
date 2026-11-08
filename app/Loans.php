@@ -23,8 +23,11 @@ final class Loans
         SELECT l.*,
                d.name AS device_name, d.barcode AS device_barcode, d.asset_tag AS device_asset_tag,
                d.category AS device_category, d.manufacturer AS device_manufacturer, d.model AS device_model,
+               d.item_type AS device_item_type, d.seats_total AS device_seats_total,
                t.full_name AS tech_name, t.email AS tech_email,
                c.first_name AS client_first_name, c.last_name AS client_last_name, c.email AS client_email,
+               c.mobile AS client_mobile, c.sms_opt_in AS client_sms_opt_in,
+               oru.full_name AS outcome_recorded_by_name,
                p.name AS program_name,
                lp.name AS period_name, lp.days AS period_days, lp.max_extensions AS period_max_extensions,
                ob.full_name AS checked_out_by_name,
@@ -38,6 +41,7 @@ final class Loans
           LEFT JOIN loan_periods lp ON lp.id = l.loan_period_id
           LEFT JOIN users ob ON ob.id = l.checked_out_by
           LEFT JOIN users ib ON ib.id = l.checked_in_by
+          LEFT JOIN users oru ON oru.id = l.outcome_recorded_by
           LEFT JOIN loan_requests r ON r.id = l.request_id';
 
     // -----------------------------------------------------------------------
@@ -152,16 +156,37 @@ final class Loans
             // device blocks here and then correctly sees it as already out.
             $locked = Db::one('SELECT * FROM devices WHERE id = ? FOR UPDATE', [$device['id']]);
 
-            // Order matters: an active loan is checked first because its message
-            // names the loan reference, which is what the person at the desk
-            // needs. "This device is marked checked out" is true but useless.
-            $existing = self::activeLoanForDevice((int) $locked['id'], true);
-            if ($existing !== null) {
+            // How many of this can be out at once. A physical device is one;
+            // a software licence is however many seats were bought. Modelled
+            // here rather than as a separate kind of thing, because everything
+            // else about lending a seat is identical to lending a device.
+            $seats = max(1, (int) ($locked['seats_total'] ?? 1));
+            $out   = (int) Db::value(
+                'SELECT COUNT(*) FROM loans WHERE device_id = ? AND status = "active"',
+                [$locked['id']],
+            );
+
+            if ($out >= $seats) {
+                // Order matters for the single-seat case: naming the loan
+                // reference is what the person at the desk actually needs.
+                // "This device is marked checked out" is true but useless.
+                $existing = self::activeLoanForDevice((int) $locked['id'], true);
+
                 throw Util::conflict(
-                    "{$locked['name']} is already on loan ({$existing['reference']}). "
-                    . 'Check it in before lending it again.',
-                    ['device_id' => (int) $locked['id'], 'loan_id' => (int) $existing['id'],
-                     'loan_reference' => $existing['reference']],
+                    $seats === 1
+                        ? "{$locked['name']} is already on loan ({$existing['reference']}). "
+                          . 'Check it in before lending it again.'
+                        : sprintf(
+                            'All %d seats of %s are in use. One has to come back before another can '
+                            . 'go out.', $seats, $locked['name'],
+                        ),
+                    [
+                        'device_id'      => (int) $locked['id'],
+                        'loan_id'        => $existing['id'] ?? null,
+                        'loan_reference' => $existing['reference'] ?? null,
+                        'seats_total'    => $seats,
+                        'seats_in_use'   => $out,
+                    ],
                 );
             }
 
@@ -170,6 +195,37 @@ final class Loans
                     "{$locked['name']} cannot be checked out because it is marked \""
                     . str_replace('_', ' ', $locked['status']) . '".',
                     ['device_id' => (int) $locked['id'], 'status' => $locked['status']],
+                );
+            }
+
+            // A licence that has expired should not go out, whatever its
+            // status says: the person receiving it would find it does not run.
+            if (!empty($locked['licence_expires'])
+                && strtotime((string) $locked['licence_expires']) < strtotime('today')
+            ) {
+                throw Util::conflict(
+                    sprintf(
+                        'The licence for %s expired on %s. Renew it before lending it, or the person '
+                        . 'receiving it will find it does not work.',
+                        $locked['name'], date('j M Y', strtotime((string) $locked['licence_expires'])),
+                    ),
+                    ['device_id' => (int) $locked['id'], 'licence_expires' => $locked['licence_expires']],
+                );
+            }
+
+            // Equipment that touches ears, mouths and hands is cleaned between
+            // users. Enforced only where an organisation has asked for it.
+            if (!empty($settings['hygiene.enabled'])
+                && !empty($settings['hygiene.require_between_loans'])
+                && !empty($locked['needs_cleaning'])
+            ) {
+                throw Util::conflict(
+                    sprintf(
+                        '%s has not been cleaned since it was last returned, and this organisation '
+                        . 'requires cleaning between users. Record the cleaning, then lend it.',
+                        $locked['name'],
+                    ),
+                    ['device_id' => (int) $locked['id'], 'needs_cleaning' => true],
                 );
             }
 
@@ -229,14 +285,15 @@ final class Loans
                         'INSERT INTO loans
                            (organization_id, reference, device_id, request_id, tech_id, client_id, program_id,
                             loan_period_id, status, checked_out_at, checked_out_by, checkout_method,
-                            due_at, original_due_at, condition_out, notes)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, "active", ?, ?, ?, ?, ?, ?, ?)',
+                            due_at, original_due_at, condition_out, notes, authorization_ref)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, "active", ?, ?, ?, ?, ?, ?, ?, ?)',
                         [
                             $organizationId, $reference, $locked['id'], $input['requestId'] ?? null,
                             $techId, $clientId, $programId, $periodId,
                             Util::mysqlDateTime($now), $actorId, $method,
                             Util::mysqlDateTime($dueAt), Util::mysqlDateTime($dueAt),
                             $input['conditionOut'] ?? null, $input['notes'] ?? null,
+                            $input['authorizationRef'] ?? null,
                         ],
                     );
                     break;
@@ -252,7 +309,14 @@ final class Loans
                 throw new \RuntimeException('Could not allocate a unique loan reference.');
             }
 
-            Db::execute('UPDATE devices SET status = "checked_out", updated_at = NOW() WHERE id = ?', [$locked['id']]);
+            // A multi-seat item stays available while seats remain. Marking it
+            // checked out after the first seat would hide the other nineteen.
+            if ($out + 1 >= $seats) {
+                Db::execute(
+                    'UPDATE devices SET status = "checked_out", updated_at = NOW() WHERE id = ?',
+                    [$locked['id']],
+                );
+            }
 
             Db::execute(
                 'INSERT INTO loan_events (loan_id, event_type, new_due_at, actor_id, notes)
@@ -432,10 +496,31 @@ final class Loans
                 ],
             );
 
+            // Returning a seat makes a multi-seat item available again even
+            // though other seats are still out, so "available" is decided by
+            // what remains rather than by this one return.
+            $seats = max(1, (int) ($device['seats_total'] ?? 1));
+
+            $stillOut = (int) Db::value(
+                'SELECT COUNT(*) FROM loans WHERE device_id = ? AND status = "active" AND id <> ?',
+                [$device['id'], $loan['id']],
+            );
+
+            $resolvedStatus = ($newDeviceStatus === 'available' && $stillOut > 0 && $stillOut >= $seats)
+                ? 'checked_out'
+                : $newDeviceStatus;
+
+            // Flagged for cleaning on the way back in, not on the way out:
+            // this is the moment it stopped being with someone.
+            $hygiene = !empty(Settings::all($organizationId)['hygiene.enabled']);
+
             Db::execute(
-                'UPDATE devices SET status = ?, condition_note = COALESCE(?, condition_note), updated_at = NOW()
+                'UPDATE devices
+                    SET status = ?, condition_note = COALESCE(?, condition_note),
+                        needs_cleaning = CASE WHEN ? = 1 THEN 1 ELSE needs_cleaning END,
+                        updated_at = NOW()
                   WHERE id = ?',
-                [$newDeviceStatus, $conditionIn, $device['id']],
+                [$resolvedStatus, $conditionIn, $hygiene ? 1 : 0, $device['id']],
             );
 
             Db::execute(
@@ -841,6 +926,13 @@ final class Loans
             ? $loan['client_first_name'] . ' ' . $loan['client_last_name']
             : null;
         $loan['holder_summary'] = self::describeHolders($loan);
+
+        $loan['outcome_label'] = empty($loan['outcome'])
+            ? null
+            : (Outcomes::LABELS[$loan['outcome']] ?? $loan['outcome']);
+
+        // A returned trial with no outcome is the thing somebody has to chase.
+        $loan['outcome_outstanding'] = $loan['status'] === 'returned' && empty($loan['outcome']);
 
         return $loan;
     }

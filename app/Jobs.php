@@ -17,7 +17,10 @@ namespace Loaner;
 
 final class Jobs
 {
-    public const NAMES = ['due_soon', 'overdue', 'reservation_expiry', 'session_prune', 'scan_prune'];
+    public const NAMES = [
+        'due_soon', 'overdue', 'reservation_expiry', 'outcome_chase',
+        'session_prune', 'scan_prune', 'retention_purge',
+    ];
 
     public const LABELS = [
         'due_soon'           => 'Due-soon reminders',
@@ -25,6 +28,8 @@ final class Jobs
         'reservation_expiry' => 'Expire unclaimed reservations',
         'session_prune'      => 'Remove expired sessions',
         'scan_prune'         => 'Clear old scan events',
+        'outcome_chase'      => 'Chase missing trial outcomes',
+        'retention_purge'    => 'Apply the data retention policy',
     ];
 
     /**
@@ -72,8 +77,10 @@ final class Jobs
                 'due_soon'           => self::dueSoonReminders($actor, $organizationId),
                 'overdue'            => self::overdueNotices($actor, $organizationId),
                 'reservation_expiry' => self::expireReservations($actor, $organizationId),
+                'outcome_chase'      => self::chaseOutcomes($actor, $organizationId),
                 'session_prune'      => self::pruneSessions(),
                 'scan_prune'         => Scan::prune(),
+                'retention_purge'    => Retention::purge($actor, $organizationId),
             };
 
             $summary = $outcome['summary'] ?? 'Completed.';
@@ -221,17 +228,93 @@ final class Jobs
         ];
     }
 
+    /**
+     * Remind somebody that completed trials have no outcome recorded.
+     *
+     * Not a client-facing message: this goes to the administrators, because an
+     * outcome is staff work. Sent once rather than daily — a nag that arrives
+     * every morning gets filtered, and then nobody sees the one that mattered.
+     */
+    private static function chaseOutcomes(?array $actor, int $organizationId): array
+    {
+        if (!Settings::get($organizationId, 'outcomes.enabled')) {
+            return ['summary' => 'Trial outcomes are switched off.', 'outstanding' => 0];
+        }
+
+        $after = max(1, (int) Settings::get($organizationId, 'outcomes.chase_after_days'));
+
+        $rows = Db::all(
+            'SELECT l.reference, d.name AS device_name,
+                    CONCAT(c.first_name, " ", c.last_name) AS client_name, l.returned_at
+               FROM loans l
+               JOIN devices d ON d.id = l.device_id
+               LEFT JOIN clients c ON c.id = l.client_id
+              WHERE l.organization_id = ? AND l.status = "returned" AND l.outcome IS NULL
+                AND l.returned_at < DATE_SUB(NOW(), INTERVAL ? DAY)
+                AND l.returned_at > DATE_SUB(NOW(), INTERVAL ? DAY)
+              ORDER BY l.returned_at
+              LIMIT 50',
+            [$organizationId, $after, $after + 1],
+        );
+
+        if ($rows === []) {
+            return ['summary' => 'No trials became overdue for an outcome today.', 'outstanding' => 0];
+        }
+
+        $recipients = Settings::parseRecipients(
+            (string) Settings::get($organizationId, 'notify.admin_recipients'),
+        );
+
+        if ($recipients === []) {
+            $recipients = array_column(Db::all(
+                'SELECT email FROM users WHERE organization_id = ? AND role = "admin" AND active = 1',
+                [$organizationId],
+            ), 'email');
+        }
+
+        $list = '';
+        foreach ($rows as $row) {
+            $list .= '<li>' . Util::escapeHtml($row['device_name'])
+                  . ($row['client_name'] !== null ? ' — ' . Util::escapeHtml($row['client_name']) : '')
+                  . ' (' . Util::escapeHtml($row['reference']) . ')</li>';
+        }
+
+        $result = Mailer::send($actor, $organizationId, [
+            'to'        => $recipients,
+            'subject'   => count($rows) . ' trial(s) need an outcome recorded',
+            'html'      => Mailer::layout(
+                'Trials waiting for an outcome',
+                '<p>These devices came back ' . $after . ' day(s) ago and no trial outcome has been '
+                . 'recorded. Without one they are missing from the purchasing reports.</p><ul>'
+                . $list . '</ul>',
+            ),
+            'eventType' => 'outcome_chase',
+        ]);
+
+        return [
+            'summary' => sprintf(
+                '%d trial(s) chased for an outcome; reminder %s.',
+                count($rows), $result['sent'] ? 'sent' : 'not sent (' . ($result['reason'] ?? '') . ')',
+            ),
+            'outstanding' => count($rows),
+            'sent'        => $result['sent'],
+        ];
+    }
+
     private static function pruneSessions(): array
     {
         $sessions = Auth::pruneExpiredSessions();
+        $pending  = Auth::prunePendingLogins();
         $resets   = Db::execute(
             'DELETE FROM password_resets WHERE expires_at < DATE_SUB(NOW(), INTERVAL 7 DAY)',
         );
 
         return [
-            'summary' => sprintf('%d expired session%s and %d old reset token%s removed.',
-                $sessions, $sessions === 1 ? '' : 's', $resets, $resets === 1 ? '' : 's'),
-            'sessions' => $sessions, 'reset_tokens' => $resets,
+            'summary' => sprintf(
+                '%d expired session(s), %d half-finished sign-in(s) and %d old reset token(s) removed.',
+                $sessions, $pending, $resets,
+            ),
+            'sessions' => $sessions, 'pending_logins' => $pending, 'reset_tokens' => $resets,
         ];
     }
 

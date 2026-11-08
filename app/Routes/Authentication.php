@@ -32,6 +32,7 @@ final class Authentication
         $router->post('/auth/change-password', [self::class, 'changePassword']);
         $router->post('/auth/forgot-password', [self::class, 'forgotPassword']);
         $router->post('/auth/reset-password', [self::class, 'resetPassword']);
+        $router->post('/auth/login/verify', [self::class, 'verifySecondFactor']);
     }
 
     public static function login(Request $request): never
@@ -79,6 +80,21 @@ final class Authentication
                 );
             }
 
+            // The password was right but a code is needed. Not an error: the
+            // sign-in is half done, and the client is told how to finish it.
+            if ($result['reason'] === 'totp_required') {
+                Response::json([
+                    'second_factor_required' => true,
+                    'pending_id'  => $result['pendingId'],
+                    'can_recover' => $result['canRecover'],
+                    'message'     => 'Enter the six-digit code from your authenticator app.',
+                    'recovery_hint' => $result['canRecover']
+                        ? 'Lost the phone? A recovery code works here too.'
+                        : 'You have no recovery codes left. If you cannot produce a code, another '
+                          . 'administrator will have to reset two-factor on your account.',
+                ], 200);
+            }
+
             if ($result['reason'] === 'inactive') {
                 Response::error(
                     403,
@@ -121,6 +137,102 @@ final class Authentication
             'organization'         => self::organization((int) $user['organization_id']),
             'capabilities'         => Auth::capabilitiesForRole($user['role']),
             'must_change_password' => (bool) $user['must_change_password'],
+            // Checked after sign-in rather than at the door: an administrator
+            // who has not enrolled yet has to be able to get in to do it, or
+            // turning the requirement on would lock out whoever turned it on.
+            'must_enrol_2fa'       => Auth::mustEnrolSecondFactor($user, (int) $user['organization_id']),
+        ]);
+    }
+
+    /**
+     * Second step of a two-factor sign-in.
+     *
+     * The half-finished attempt lives server-side, so a browser cannot skip
+     * from "password accepted" to "signed in" by editing what it holds.
+     */
+    public static function verifySecondFactor(Request $request): never
+    {
+        $pendingId = Util::str($request->input('pending_id'), 128);
+        $code      = (string) ($request->input('code') ?? '');
+
+        if ($pendingId === null) {
+            throw Util::badRequest('Start signing in again.', ['field' => 'pending_id']);
+        }
+
+        if (trim($code) === '') {
+            throw Util::badRequest('Enter the code from your authenticator app.', ['field' => 'code']);
+        }
+
+        $result = Auth::completeSecondFactor($pendingId, $code);
+
+        if (!$result['ok']) {
+            if (isset($result['user'])) {
+                Audit::record(
+                    [
+                        'organizationId' => (int) $result['user']['organization_id'],
+                        'userId'         => (int) $result['user']['user_id'],
+                        'label'          => $result['user']['full_name'],
+                        'actorType'      => 'user',
+                        'ip'             => $request->ip,
+                    ],
+                    [
+                        'action'     => Audit::TWOFACTOR_FAILED,
+                        'entityType' => 'user',
+                        'entityId'   => (int) $result['user']['user_id'],
+                        'summary'    => 'Wrong two-factor code on sign-in',
+                    ],
+                );
+            }
+
+            Response::error(401, 'bad_code', match ($result['reason']) {
+                'expired' => 'That sign-in attempt has expired. Enter your email and password again.',
+                'too_many_attempts' => 'Too many wrong codes. Enter your email and password again.',
+                default => isset($result['remaining']) && $result['remaining'] > 0
+                    ? "That code is not right. {$result['remaining']} attempt(s) left before you have "
+                      . 'to start again.'
+                    : 'That code is not right.',
+            });
+        }
+
+        $user    = $result['user'];
+        $session = Auth::createSession((int) $user['id'], $request->ip, $request->header('User-Agent'));
+
+        Auth::sendSessionCookie($session['id'], $session['expiresAt']);
+
+        $actor = [
+            'organizationId' => (int) $user['organization_id'],
+            'userId'         => (int) $user['id'],
+            'label'          => $user['full_name'],
+            'actorType'      => 'user',
+            'ip'             => $request->ip,
+        ];
+
+        Audit::record($actor, [
+            'action'      => $result['usedRecovery'] ? Audit::TWOFACTOR_RECOVERY_USED : Audit::LOGIN,
+            'entityType'  => 'user',
+            'entityId'    => (int) $user['id'],
+            'entityLabel' => $user['email'],
+            'summary'     => $result['usedRecovery']
+                ? $user['full_name'] . ' signed in with a recovery code ('
+                  . $result['recoveryRemaining'] . ' left)'
+                : $user['full_name'] . ' signed in with a second factor',
+        ]);
+
+        Response::json([
+            'user'                 => Auth::publicUser($user),
+            'organization'         => self::organization((int) $user['organization_id']),
+            'capabilities'         => Auth::capabilitiesForRole($user['role']),
+            'must_change_password' => (bool) $user['must_change_password'],
+            // Said plainly, because somebody down to their last code needs to
+            // generate more before they are locked out of their own system.
+            'used_recovery_code'   => $result['usedRecovery'],
+            'recovery_notice'      => $result['usedRecovery']
+                ? sprintf(
+                    'You signed in with a recovery code. %d left. Generate a fresh set from your '
+                    . 'account settings.',
+                    $result['recoveryRemaining'],
+                )
+                : null,
         ]);
     }
 

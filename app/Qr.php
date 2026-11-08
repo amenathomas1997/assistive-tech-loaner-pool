@@ -41,6 +41,14 @@ final class Qr
         4 => ['ecc' => 18, 'groups' => [[2, 32]]],
         5 => ['ecc' => 24, 'groups' => [[2, 43]]],
         6 => ['ecc' => 16, 'groups' => [[4, 27]]],
+        // Versions 7 and up additionally carry a version-information block,
+        // which is why they are a separate undertaking from 1-6 rather than
+        // more rows in this table. Added because an otpauth:// enrolment URI
+        // runs to about 190 bytes and would not otherwise fit in a QR at all.
+        7  => ['ecc' => 18, 'groups' => [[4, 31]]],
+        8  => ['ecc' => 22, 'groups' => [[2, 38], [2, 39]]],
+        9  => ['ecc' => 22, 'groups' => [[3, 36], [2, 37]]],
+        10 => ['ecc' => 26, 'groups' => [[4, 43], [1, 44]]],
     ];
 
     /** Centre coordinates of the alignment patterns, per version. */
@@ -51,7 +59,21 @@ final class Qr
         4 => [6, 26],
         5 => [6, 30],
         6 => [6, 34],
+        7  => [6, 22, 38],
+        8  => [6, 24, 42],
+        9  => [6, 26, 46],
+        10 => [6, 28, 50],
     ];
+
+    /**
+     * Lowest version that carries a version-information block.
+     *
+     * Below this the decoder works the version out from the symbol's size;
+     * at and above it, the version is written into the symbol twice, with BCH
+     * error correction, because a large symbol is more likely to be read at an
+     * angle where counting modules goes wrong.
+     */
+    private const VERSION_INFO_FROM = 7;
 
     private static ?array $expTable = null;
     private static ?array $logTable = null;
@@ -147,7 +169,7 @@ final class Qr
     /** Largest string this encoder will accept, in bytes. */
     public static function maxLength(): int
     {
-        return self::dataCapacity(6);
+        return self::dataCapacity(max(array_keys(self::BLOCKS)));
     }
 
     // -----------------------------------------------------------------------
@@ -162,8 +184,23 @@ final class Qr
             $total += $count * $perBlock;
         }
 
-        // 4 bits mode + 8 bits character count = 12 bits of overhead.
-        return $total - 2;
+        // 4 bits mode plus the character count, which is 8 bits up to version
+        // 9 and 16 bits from version 10 — so the overhead is 12 or 20 bits.
+        return $total - (int) ceil((4 + self::countBits($version)) / 8);
+    }
+
+    /**
+     * Width of the byte-mode character count field.
+     *
+     * Eight bits for versions 1-9 and sixteen from version 10. Getting this
+     * wrong does not produce an obviously broken symbol: it produces one that
+     * passes every structural check, reads back to its own codewords, and
+     * decodes on no reader at all — which is exactly what happened the first
+     * time version 10 was added here, and what the round-trip harness caught.
+     */
+    private static function countBits(int $version): int
+    {
+        return $version < 10 ? 8 : 16;
     }
 
     private static function chooseVersion(int $length): int
@@ -187,14 +224,17 @@ final class Qr
     {
         $bits = '';
 
-        $bits .= '0100';                                        // byte mode
-        $bits .= str_pad(decbin(count($bytes)), 8, '0', STR_PAD_LEFT); // count, 8 bits for v1-9
+        $countBits = self::countBits($version);
+
+        $bits .= '0100';                                                       // byte mode
+        $bits .= str_pad(decbin(count($bytes)), $countBits, '0', STR_PAD_LEFT); // character count
 
         foreach ($bytes as $byte) {
             $bits .= str_pad(decbin($byte), 8, '0', STR_PAD_LEFT);
         }
 
-        $totalData = self::dataCapacity($version) + 2; // codewords
+        $totalData = self::dataCapacity($version)
+                   + (int) ceil((4 + $countBits) / 8); // codewords
         $capacity  = $totalData * 8;
 
         // Terminator: up to four zero bits.
@@ -429,6 +469,9 @@ final class Qr
         $modules[$size - 8][8]  = true;
         $reserved[$size - 8][8] = true;
 
+        // Version information, for version 7 and above.
+        self::placeVersionInfo($modules, $reserved, $version, $size);
+
         // Reserve the format-information areas; the bits go in later, once a
         // mask has been chosen.
         for ($i = 0; $i < 9; $i++) {
@@ -547,6 +590,60 @@ final class Qr
      *
      * Bit 0 is the least significant.
      */
+    /**
+     * The 18-bit version information word.
+     *
+     * Six bits of version followed by a BCH(18,6) remainder under the
+     * generator 0x1F25. Computed rather than copied from the published table:
+     * a transcribed table is one typo away from a symbol that looks perfect
+     * and reads as the wrong version, which is precisely the class of bug the
+     * round-trip harness exists to catch.
+     */
+    private static function versionInfoBits(int $version): int
+    {
+        $value = $version << 12;
+
+        // Polynomial long division in GF(2).
+        $remainder = $value;
+        for ($i = 17; $i >= 12; $i--) {
+            if ((($remainder >> $i) & 1) === 1) {
+                $remainder ^= 0x1F25 << ($i - 12);
+            }
+        }
+
+        return $value | $remainder;
+    }
+
+    /**
+     * Write the version into the two reserved blocks.
+     *
+     * Bottom-left and top-right, the same eighteen bits each time, so a tear
+     * or a thumb over one corner does not cost the reader the version.
+     */
+    private static function placeVersionInfo(array &$modules, array &$reserved, int $version, int $size): void
+    {
+        if ($version < self::VERSION_INFO_FROM) {
+            return;
+        }
+
+        $bits = self::versionInfoBits($version);
+
+        for ($i = 0; $i < 18; $i++) {
+            $bit = (($bits >> $i) & 1) === 1;
+
+            $row = intdiv($i, 3);
+            $col = $i % 3;
+
+            // Bottom-left block: 6 rows by 3 columns, just above the finder.
+            $modules[$size - 11 + $col][$row]  = $bit;
+            $reserved[$size - 11 + $col][$row] = true;
+
+            // Top-right block: the transpose of the same arrangement.
+            $modules[$row][$size - 11 + $col]  = $bit;
+            $reserved[$row][$size - 11 + $col] = true;
+        }
+    }
+
     private static function placeFormatInfo(array &$modules, int $mask, int $size): void
     {
         $bits = self::formatBits($mask);

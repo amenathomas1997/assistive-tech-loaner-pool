@@ -261,7 +261,8 @@ final class Auth
     {
         $user = Db::one(
             'SELECT id, organization_id, email, password_hash, full_name, role, active,
-                    failed_logins, locked_until, must_change_password
+                    failed_logins, locked_until, must_change_password,
+                    totp_enabled, totp_secret
                FROM users WHERE email = ? LIMIT 1',
             [strtolower($email)],
         );
@@ -300,11 +301,167 @@ final class Auth
         }
 
         Db::execute(
-            'UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = NOW() WHERE id = ?',
+            'UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?',
             [$user['id']],
         );
 
+        // The password was right, but it is not a sign-in yet if a second
+        // factor is expected. last_login_at is deliberately not touched here:
+        // it should mean "last got in", not "last typed the right password".
+        if (self::needsSecondFactor($user)) {
+            return [
+                'ok'          => false,
+                'reason'      => 'totp_required',
+                'user'        => $user,
+                'pendingId'   => self::createPendingLogin((int) $user['id']),
+                'canRecover'  => Totp::remainingRecoveryCodes((int) $user['id']) > 0,
+            ];
+        }
+
+        Db::execute('UPDATE users SET last_login_at = NOW() WHERE id = ?', [$user['id']]);
+
         return ['ok' => true, 'user' => $user];
+    }
+
+    /**
+     * Does this account have to produce a code?
+     *
+     * Either because the person turned it on, or because the organisation
+     * requires it of administrators. In the second case an administrator who
+     * has not set it up yet is NOT blocked at the door — they would have no
+     * way to enrol — they are let in and told to enrol.
+     */
+    public static function needsSecondFactor(array $user): bool
+    {
+        return (int) ($user['totp_enabled'] ?? 0) === 1 && !empty($user['totp_secret']);
+    }
+
+    /**
+     * Must this person enrol before they can do anything else?
+     *
+     * Checked after sign-in rather than during it, so turning the requirement
+     * on cannot lock out the administrator who turned it on.
+     */
+    public static function mustEnrolSecondFactor(array $user, int $organizationId): bool
+    {
+        return ($user['role'] ?? '') === 'admin'
+            && (int) ($user['totp_enabled'] ?? 0) !== 1
+            && (bool) Settings::get($organizationId, 'security.require_2fa_for_admins');
+    }
+
+    // -----------------------------------------------------------------------
+    // The half-finished sign-in
+    //
+    // Held server-side rather than in a cookie or a hidden field, so the
+    // browser cannot skip from "password accepted" to "signed in" by editing
+    // what it was given.
+    // -----------------------------------------------------------------------
+
+    /** Minutes to produce a code before the attempt has to start again. */
+    private const PENDING_MINUTES = 10;
+
+    /** Wrong codes allowed before the attempt is abandoned. */
+    private const MAX_TOTP_ATTEMPTS = 5;
+
+    private static function createPendingLogin(int $userId): string
+    {
+        Db::execute('DELETE FROM pending_logins WHERE user_id = ? OR expires_at < NOW()', [$userId]);
+
+        $id = Util::randomToken(32);
+
+        Db::execute(
+            'INSERT INTO pending_logins (id, user_id, ip, user_agent, expires_at)
+             VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE))',
+            [
+                Util::sha256($id), $userId,
+                $_SERVER['REMOTE_ADDR'] ?? null,
+                mb_substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255),
+                self::PENDING_MINUTES,
+            ],
+        );
+
+        return $id;
+    }
+
+    /**
+     * Finish a sign-in with a code, or with a recovery code.
+     *
+     * @return array{ok: bool, reason?: string, user?: array, usedRecovery?: bool}
+     */
+    public static function completeSecondFactor(string $pendingId, string $code): array
+    {
+        // Columns are named explicitly rather than taking p.*, because
+        // pending_logins has its own "id" and a SELECT p.* quietly puts that
+        // where a caller reasonably expects the user's id. That cost a
+        // foreign-key violation on session creation, from a value that looked
+        // like an id right up until it was used as one.
+        $pending = Db::one(
+            'SELECT p.attempts, p.expires_at,
+                    u.id AS user_id, u.organization_id, u.email, u.full_name, u.role,
+                    u.active, u.must_change_password, u.totp_secret, u.totp_enabled
+               FROM pending_logins p JOIN users u ON u.id = p.user_id
+              WHERE p.id = ? AND p.expires_at > NOW()',
+            [Util::sha256($pendingId)],
+        );
+
+        if ($pending === null) {
+            return ['ok' => false, 'reason' => 'expired'];
+        }
+
+        if ((int) $pending['attempts'] >= self::MAX_TOTP_ATTEMPTS) {
+            Db::execute('DELETE FROM pending_logins WHERE id = ?', [Util::sha256($pendingId)]);
+            return ['ok' => false, 'reason' => 'too_many_attempts'];
+        }
+
+        $secret = Secrets::decrypt((string) $pending['totp_secret']);
+        $clean  = trim($code);
+
+        // A recovery code is the way back in from a lost phone, which is the
+        // commonest reason anyone is stuck here. Tried second so a genuine
+        // six-digit code never burns one.
+        $usedRecovery = false;
+
+        if (!Totp::verify((string) $secret, $clean)) {
+            if (!Totp::consumeRecoveryCode((int) $pending['user_id'], $clean)) {
+                Db::execute(
+                    'UPDATE pending_logins SET attempts = attempts + 1 WHERE id = ?',
+                    [Util::sha256($pendingId)],
+                );
+
+                return [
+                    'ok'        => false,
+                    'reason'    => 'bad_code',
+                    'user'      => $pending,
+                    'remaining' => self::MAX_TOTP_ATTEMPTS - ((int) $pending['attempts'] + 1),
+                ];
+            }
+
+            $usedRecovery = true;
+        }
+
+        Db::execute('DELETE FROM pending_logins WHERE id = ?', [Util::sha256($pendingId)]);
+        Db::execute('UPDATE users SET last_login_at = NOW() WHERE id = ?', [$pending['user_id']]);
+
+        // Built explicitly, so what comes back is unambiguously a user row.
+        return [
+            'ok'   => true,
+            'user' => [
+                'id'                   => (int) $pending['user_id'],
+                'organization_id'      => (int) $pending['organization_id'],
+                'email'                => $pending['email'],
+                'full_name'            => $pending['full_name'],
+                'role'                 => $pending['role'],
+                'must_change_password' => (int) $pending['must_change_password'],
+            ],
+            'usedRecovery'      => $usedRecovery,
+            'recoveryRemaining' => Totp::remainingRecoveryCodes((int) $pending['user_id']),
+        ];
+    }
+
+    /** Drop abandoned half-finished sign-ins. Called by the housekeeping job. */
+    public static function prunePendingLogins(): int
+    {
+        return Db::execute('DELETE FROM pending_logins WHERE expires_at < NOW()');
     }
 
     // -----------------------------------------------------------------------
