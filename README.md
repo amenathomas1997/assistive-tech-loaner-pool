@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/amenathomas1997/assistive-tech-loaner-pool/actions/workflows/test.yml/badge.svg)](https://github.com/amenathomas1997/assistive-tech-loaner-pool/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![WCAG 2.2 AA](https://img.shields.io/badge/accessibility-WCAG%202.2%20AA-success)](#accessibility)
+[![WCAG 2.2 AA](https://img.shields.io/badge/accessibility-WCAG%202.2%20AA%20%2B%20most%20AAA-success)](#accessibility)
 
 Assistive technology loaner pool management: device inventory, barcode
 check-out and check-in, loan tracking, counselor requests, audit logging and a
@@ -238,21 +238,39 @@ version number, with a User-Agent that names the software and not the site.
 
 ## Accessibility
 
-Built to **WCAG 2.2 Level AA**, including the criteria new in 2.2:
+This lends assistive technology. The people it exists to serve are disabled;
+so, often, are the people operating it.
 
-| Criterion | How |
-|---|---|
-| 2.4.11 Focus Not Obscured | Focusable elements reserve space below the sticky header |
-| 2.5.7 Dragging Movements | No drag-only interaction exists anywhere |
-| 2.5.8 Target Size | Every target ≥ 24×24 px; primary controls ≥ 44×44 px |
-| 3.2.6 Consistent Help | Help sits in the same header position on every screen |
-| 3.3.7 Redundant Entry | The installer carries answers across steps; forms never re-ask |
-| 3.3.8 Accessible Authentication | Correct `autocomplete` tokens, paste never blocked, no cognitive test |
+**WCAG 2.2 Level A and AA are met in full**, including every criterion new in
+2.2. **Level AAA is substantially met but not claimed**: of the 23 applicable
+AAA criteria, 20 pass, 2 pass in part, and 1 — an in-application colour
+picker — is not provided. WCAG itself advises against requiring AAA across a
+whole application, so [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md) names
+each criterion individually rather than making a bare claim.
 
-Throughout: colour is never the only signal, every scan result is announced
-through a live region, focus moves to the heading on navigation, dialogs use
-native `<dialog>` for real focus trapping, and the interface works in both
-light and dark schemes and in Windows High Contrast Mode.
+| Criterion | Level | How |
+|---|---|---|
+| 1.4.6 Contrast (Enhanced) | AAA | Every text pairing ≥ 7:1 in both themes, checked on every build |
+| 2.1.3 Keyboard (No Exception) | AAA | Signing is type / draw / photograph, typing by default. Nothing needs a pointer |
+| 2.2.5 Re-authenticating | AAA | An expired session signs back in over the page; nothing on screen is lost |
+| 2.4.11 Focus Not Obscured | AA | Focusable elements reserve space below the sticky header |
+| 2.4.13 Focus Appearance | AAA | 3px outline plus a ring, 8:1 against the surface |
+| 2.5.7 Dragging Movements | AA | No drag-only interaction exists anywhere |
+| 2.5.5 / 2.5.8 Target Size | AAA / AA | Every target is 44×44 |
+| 3.1.4 Abbreviations | AAA | Glossary in the help dialog, reachable from every screen |
+| 3.2.6 Consistent Help | AA | Help sits in the same header position on every screen |
+| 3.3.7 Redundant Entry | AA | The installer carries answers across steps; forms never re-ask |
+| 3.3.8 Accessible Authentication | AA | Correct `autocomplete` tokens, paste never blocked, no cognitive test |
+
+Throughout: colour is never the only signal, every landmark is named, every
+scan result is announced through a live region, focus moves to the heading on
+navigation, dialogs use native `<dialog>` for real focus trapping, and the
+interface works in both light and dark schemes and in Windows High Contrast
+Mode.
+
+Press `G` then a letter to go to any screen, `/` for the search on the screen
+you are on, `?` for the whole list. Single-key shortcuts can be switched off,
+as SC 2.1.4 requires, and never fire while you are typing.
 
 ---
 
@@ -263,7 +281,7 @@ light and dark schemes and in Windows High Contrast Mode.
 ```
 
 Drops and recreates the test database, runs the web installer through its own
-API, then exercises the application end to end — 362 checks covering
+API, then exercises the application end to end — 430 checks covering
 authentication, RBAC, spreadsheet import, barcode encoding, the loan
 lifecycle, the request workflow, kits and accessories, agreements and
 signatures, condition photos, the waitlist, repairs, funding reporting, bulk
@@ -281,6 +299,19 @@ Barcode encoders alone, with no database:
 ```bash
 php scripts/verify-barcode.php
 ```
+
+Colour contrast alone, with no database or server:
+
+```bash
+node scripts/verify-contrast.mjs
+```
+
+Checks 58 colour pairings against the 7:1 of SC 1.4.6 (or the 3:1 of SC
+1.4.11 for borders and the focus ring), reading the tokens out of the
+stylesheet so it cannot drift from what it checks. Contrast is the one
+accessibility property that decays silently: nothing breaks when a grey is
+lightened to make a heading look nicer, and the only person who notices is
+the one who can no longer read it.
 
 The Code 128 and Code 39 tables are hand-transcribed, so this asserts
 properties of the specifications — every character exactly 11 modules wide,

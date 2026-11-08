@@ -451,6 +451,28 @@ a, button, input, select, textarea, summary,
 }
 .page-header p { margin: 5px 0 0; color: var(--text-muted); max-width: 68ch; }
 
+/* Line length.
+   SC 1.4.8 Visual Presentation (Level AAA) asks that blocks of text be no
+   wider than 80 characters. Explanation in this application ran to 138 on a
+   wide screen, which is the width at which the eye loses the start of the
+   next line — the specific difficulty this criterion exists for. Applied to
+   prose only: a table cell, a form control and a definition list are not
+   blocks of text and capping them would break the layout. */
+.card p,
+.card li,
+.stack > p,
+.field-help,
+.option-help,
+.alert .alert-body p,
+.modal-body > p,
+.glossary dd {
+  /* 70ch, not 80. The ch unit is the width of a zero, and lowercase prose is
+     narrower than that, so 80ch holds rather more than 80 characters. */
+  max-width: 70ch;
+}
+/* Table cells are not blocks of text; capping them breaks the column widths. */
+.card table p, .card table li { max-width: none; }
+
 .breadcrumb { font-size: 0.86rem; color: var(--text-muted); margin-bottom: 6px; }
 .breadcrumb a { color: var(--text-muted); }
 
