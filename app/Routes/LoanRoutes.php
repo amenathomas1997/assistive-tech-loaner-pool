@@ -143,6 +143,10 @@ final class LoanRoutes
             'accessoriesOut'   => $body['accessories'] ?? $body['accessories_out']
                 ?? $body['accessoriesOut'] ?? null,
             'requestId'        => $body['request_id'] ?? $body['requestId'] ?? null,
+            // Lend a device that is held for somebody else. Explicit, and
+            // audited against the hold it overrode; the person held for goes
+            // back to the top of the queue.
+            'overrideHold'     => Util::bool($body['override_hold'] ?? $body['overrideHold'] ?? false),
             // The VR authorisation the equipment goes out against. Without it
             // on the loan there is no way to tie what was lent back to the
             // case that paid for it.

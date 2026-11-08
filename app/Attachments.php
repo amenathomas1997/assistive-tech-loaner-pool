@@ -417,6 +417,20 @@ final class Attachments
             throw Util::notFound('That attachment does not exist.');
         }
 
+        // The foreign key from loan_agreements is ON DELETE SET NULL, so
+        // deleting a signature image would quietly leave a "signed" agreement
+        // with nothing signed on it. The retention policy promises signed
+        // agreements are never deleted; this is where that promise is kept.
+        $kind = Db::value('SELECT kind FROM attachments WHERE id = ?', [$attachmentId]);
+
+        if ($kind === 'signature') {
+            throw Util::conflict(
+                'That image is the signature on a loan agreement, and a signed agreement is kept '
+                . 'as it was signed. If the agreement itself is wrong, add a note to the loan.',
+                ['attachment_id' => $attachmentId, 'kind' => 'signature'],
+            );
+        }
+
         // Row first: a database row pointing at a missing file is a cosmetic
         // problem, whereas a file with no row is invisible and never cleaned up.
         Db::execute('DELETE FROM attachments WHERE id = ? AND organization_id = ?', [$attachmentId, $organizationId]);

@@ -289,7 +289,7 @@ as SC 2.1.4 requires, and never fire while you are typing.
 ```
 
 Drops and recreates the test database, runs the web installer through its own
-API, then exercises the application end to end — 655 checks covering
+API, then exercises the application end to end — 682 checks covering
 authentication, RBAC, spreadsheet import, barcode encoding, the loan
 lifecycle, the request workflow, kits and accessories, agreements and
 signatures, condition photos, the waitlist, repairs, funding reporting, bulk
@@ -327,6 +327,16 @@ carrying a formula, a backup carrying live session ids, and a two-factor code
 accepted twice. `scripts/e2e-security.sh` proves each over HTTP;
 `scripts/verify-security.php` holds the decision tables an HTTP test cannot
 reach — the lockout window and TOTP time steps, which need time to pass.
+
+**The custody suite** covers who holds what. The same audit, reading the loan
+and reservation logic, found that a device the waitlist had just promised to
+someone could be lent to anyone — `reserved` was a status and nothing checked
+it — and that when the right person did collect it, nothing recorded that
+either, so every collected reservation went on to "expire". A hold is now
+enforced at check-out, can be overridden explicitly and audibly, and is
+fulfilled when its person collects; a cancelled loan consults the waitlist; a
+reservation for next month is not held today; and the signature on a signed
+agreement cannot be deleted. `scripts/e2e-custody.sh` walks each of those.
 
 Barcode encoders alone, with no database:
 

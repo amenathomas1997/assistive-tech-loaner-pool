@@ -235,6 +235,77 @@ final class Loans
             self::assertBelongs('clients', $clientId, $organizationId, 'client');
             self::assertBelongs('programs', $programId, $organizationId, 'program');
 
+            // A request id is a claim that this loan fulfils that request, so
+            // it has to be this organisation's and still open. Unchecked, a
+            // mistyped id was a foreign-key failure reported as "something
+            // went wrong", and another tenant's id would have been stored and
+            // its reference shown on the loan.
+            $requestId = $input['requestId'] ?? null;
+            if (!empty($requestId)) {
+                $linked = Db::one(
+                    'SELECT id, status, reference FROM loan_requests WHERE id = ? AND organization_id = ?',
+                    [$requestId, $organizationId],
+                );
+                if ($linked === null) {
+                    throw Util::badRequest('That request does not exist.', ['field' => 'request_id']);
+                }
+                if ($linked['status'] !== 'approved') {
+                    throw Util::conflict(
+                        "Request {$linked['reference']} is {$linked['status']}, so a loan cannot be "
+                        . 'recorded against it.',
+                        ['field' => 'request_id', 'status' => $linked['status']],
+                    );
+                }
+            }
+
+            // Is somebody already promised this device?
+            //
+            // "reserved" is lendable, because the person it is held for has to
+            // be able to collect it — but only them. Until this check existed
+            // the hold was a status and nothing more: a walk-in could take a
+            // device the waitlist had just told someone was ready, and when
+            // the right person did collect it nothing recorded that either, so
+            // every fulfilled reservation went on to "expire".
+            $hold = $locked['status'] === 'reserved'
+                ? self::holdOn($organizationId, (int) $locked['id'])
+                : null;
+
+            $holdOutcome = null;
+
+            if ($hold !== null) {
+                $matches = self::holderMatches($hold, $techId, $clientId, $programId);
+
+                if ($matches) {
+                    $holdOutcome = 'fulfilled';
+                    // Collecting a device an approved request reserved IS
+                    // fulfilling that request, whichever screen it happened on.
+                    if ($hold['kind'] === 'request' && empty($requestId)) {
+                        $requestId = (int) $hold['id'];
+                    }
+                } elseif (!empty($input['overrideHold'])) {
+                    $holdOutcome = 'overridden';
+                } else {
+                    throw new HttpError(
+                        409,
+                        'device_held',
+                        sprintf(
+                            '%s is held for %s (%s%s). Check it out to them, or override the hold to '
+                            . 'lend it to somebody else — they will go back to waiting.',
+                            $locked['name'], $hold['held_for'], $hold['reference'],
+                            $hold['until'] !== null ? ', until ' . $hold['until'] : '',
+                        ),
+                        [
+                            'device_id'    => (int) $locked['id'],
+                            'held_for'     => $hold['held_for'],
+                            'hold_kind'    => $hold['kind'],
+                            'hold_id'      => (int) $hold['id'],
+                            'reference'    => $hold['reference'],
+                            'can_override' => true,
+                        ],
+                    );
+                }
+            }
+
             $maxPerClient = (int) $settings['loans.max_per_client'];
             if ($clientId && $maxPerClient > 0) {
                 $count = (int) Db::value(
@@ -288,7 +359,7 @@ final class Loans
                             due_at, original_due_at, condition_out, notes, authorization_ref)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, "active", ?, ?, ?, ?, ?, ?, ?, ?)',
                         [
-                            $organizationId, $reference, $locked['id'], $input['requestId'] ?? null,
+                            $organizationId, $reference, $locked['id'], $requestId ?: null,
                             $techId, $clientId, $programId, $periodId,
                             Util::mysqlDateTime($now), $actorId, $method,
                             Util::mysqlDateTime($dueAt), Util::mysqlDateTime($dueAt),
@@ -332,17 +403,30 @@ final class Loans
                 ]);
             }
 
-            if (!empty($input['requestId'])) {
+            if (!empty($requestId)) {
                 Db::execute(
                     'UPDATE loan_requests SET status = "fulfilled", fulfillment_state = "delivered",
                             loan_id = ?, updated_at = NOW()
-                      WHERE id = ? AND organization_id = ?',
-                    [$loanId, $input['requestId'], $organizationId],
+                      WHERE id = ? AND organization_id = ? AND status = "approved"',
+                    [$loanId, $requestId, $organizationId],
                 );
             }
 
+            // Settle the hold, in the same transaction as the loan it concerns.
+            if ($hold !== null && $hold['kind'] === 'reservation') {
+                if ($holdOutcome === 'fulfilled') {
+                    Reservations::markFulfilled($organizationId, (int) $hold['id'], $loanId);
+                } else {
+                    // Back to the queue, not cancelled: they did nothing wrong,
+                    // and the next return of a matching device will hold it
+                    // for them again.
+                    Reservations::releaseHold($organizationId, (int) $hold['id']);
+                }
+            }
+
             return ['loanId' => $loanId, 'reference' => $reference, 'device' => $locked,
-                    'dueAt' => $dueAt, 'days' => $days];
+                    'dueAt' => $dueAt, 'days' => $days, 'hold' => $hold, 'holdOutcome' => $holdOutcome,
+                    'requestId' => $requestId];
         });
 
         Audit::record($actor, [
@@ -362,10 +446,129 @@ final class Loans
                 'barcode'   => $result['device']['barcode'],
                 'tech_id'   => $techId, 'client_id' => $clientId, 'program_id' => $programId,
                 'days'      => $result['days'], 'method' => $method,
+                'request_id' => $result['requestId'] ?: null,
+                // Who it was held for and what became of that, because an
+                // overridden hold is the thing somebody will ask about later.
+                'hold' => $result['hold'] === null ? null : [
+                    'kind' => $result['hold']['kind'], 'id' => (int) $result['hold']['id'],
+                    'reference' => $result['hold']['reference'], 'held_for' => $result['hold']['held_for'],
+                    'outcome' => $result['holdOutcome'],
+                ],
             ],
         ]);
 
+        if (($result['holdOutcome'] ?? null) === 'overridden') {
+            Audit::record($actor, [
+                'organizationId' => $organizationId,
+                'action'         => Audit::LOAN_CHECKED_OUT,
+                'entityType'     => $result['hold']['kind'],
+                'entityId'       => (int) $result['hold']['id'],
+                'entityLabel'    => $result['hold']['reference'],
+                'summary'        => sprintf(
+                    'Hold on %s for %s overridden; lent as %s instead',
+                    $result['device']['name'], $result['hold']['held_for'], $result['reference'],
+                ),
+            ]);
+        }
+
         return self::get($organizationId, (int) $result['loanId']);
+    }
+
+    /**
+     * Who a reserved device is being held for, if anyone.
+     *
+     * Two things put a device into "reserved": the waitlist promoting someone
+     * when it came back, and a technician approving a request against this
+     * specific unit. Either is a promise to a named person, and a check-out
+     * to anyone else has to know that.
+     *
+     * @return array{kind: string, id: int, reference: string, held_for: string,
+     *               until: ?string, client_id: ?int, program_id: ?int, user_id: ?int}|null
+     */
+    private static function holdOn(int $organizationId, int $deviceId): ?array
+    {
+        $reservation = Db::one(
+            'SELECT r.id, r.reference, r.client_id, r.program_id, r.requested_by, r.claim_expires_at,
+                    c.first_name, c.last_name, p.name AS program_name, u.full_name AS requester_name
+               FROM reservations r
+               LEFT JOIN clients c ON c.id = r.client_id
+               LEFT JOIN programs p ON p.id = r.program_id
+               LEFT JOIN users u ON u.id = r.requested_by
+              WHERE r.organization_id = ? AND r.status = "ready" AND r.ready_device_id = ?
+              ORDER BY r.notified_at DESC LIMIT 1',
+            [$organizationId, $deviceId],
+        );
+
+        if ($reservation !== null) {
+            return [
+                'kind'       => 'reservation',
+                'id'         => (int) $reservation['id'],
+                'reference'  => $reservation['reference'],
+                'held_for'   => self::holderName($reservation),
+                'until'      => $reservation['claim_expires_at'] !== null
+                    ? date('D j M', strtotime((string) $reservation['claim_expires_at'])) : null,
+                'client_id'  => $reservation['client_id'] !== null ? (int) $reservation['client_id'] : null,
+                'program_id' => $reservation['program_id'] !== null ? (int) $reservation['program_id'] : null,
+                'user_id'    => (int) $reservation['requested_by'],
+            ];
+        }
+
+        $request = Db::one(
+            'SELECT r.id, r.reference, r.client_id, r.program_id, r.requested_by,
+                    c.first_name, c.last_name, p.name AS program_name, u.full_name AS requester_name
+               FROM loan_requests r
+               LEFT JOIN clients c ON c.id = r.client_id
+               LEFT JOIN programs p ON p.id = r.program_id
+               LEFT JOIN users u ON u.id = r.requested_by
+              WHERE r.organization_id = ? AND r.status = "approved" AND r.device_id = ?
+              ORDER BY r.reviewed_at DESC LIMIT 1',
+            [$organizationId, $deviceId],
+        );
+
+        if ($request !== null) {
+            return [
+                'kind'       => 'request',
+                'id'         => (int) $request['id'],
+                'reference'  => $request['reference'],
+                'held_for'   => self::holderName($request),
+                'until'      => null,
+                'client_id'  => $request['client_id'] !== null ? (int) $request['client_id'] : null,
+                'program_id' => $request['program_id'] !== null ? (int) $request['program_id'] : null,
+                'user_id'    => (int) $request['requested_by'],
+            ];
+        }
+
+        // Reserved, but nothing live claims it — a hold that was cleaned up
+        // incompletely. Not a reason to refuse anyone.
+        return null;
+    }
+
+    private static function holderName(array $row): string
+    {
+        if (!empty($row['first_name'])) {
+            return trim($row['first_name'] . ' ' . $row['last_name']);
+        }
+        if (!empty($row['program_name'])) {
+            return $row['program_name'];
+        }
+        return $row['requester_name'] ?? 'somebody';
+    }
+
+    /**
+     * Is this loan going to the person the hold was for?
+     *
+     * The most specific holder on the hold decides: a client if it names one,
+     * else a program, else the staff member who asked.
+     */
+    private static function holderMatches(array $hold, mixed $techId, mixed $clientId, mixed $programId): bool
+    {
+        if ($hold['client_id'] !== null) {
+            return (int) $clientId === $hold['client_id'];
+        }
+        if ($hold['program_id'] !== null) {
+            return (int) $programId === $hold['program_id'];
+        }
+        return (int) $techId === $hold['user_id'];
     }
 
     private static function assertBelongs(string $table, mixed $id, int $organizationId, string $label): void
@@ -381,8 +584,15 @@ final class Loans
         }
     }
 
-    private static function resolvePeriod(int $organizationId, ?int $periodId, mixed $customDays): array
+    private static function resolvePeriod(int $organizationId, mixed $periodId, mixed $customDays): array
     {
+        // `mixed`, not `?int`: a browser <select> submits its value as a string,
+        // so loan_period_id arrives as "2". Under strict_types a typed ?int
+        // parameter made that a TypeError — a 500 for anyone who picked a loan
+        // period by name at the desk — while curl, which sends numbers, never
+        // saw it. Validated here instead, once, for every caller.
+        $periodId = Util::int($periodId, 'loan_period_id', 1);
+
         // An explicit custom duration always wins — that is the point of it.
         if ($customDays !== null && $customDays !== '') {
             $days = (int) $customDays;
@@ -762,6 +972,18 @@ final class Loans
                               . ($reason !== null ? ": {$reason}" : ''),
             'detail'         => ['reason' => $reason],
         ]);
+
+        // The device is back on the shelf just as surely as after a check-in,
+        // and somebody may be waiting for it. This path did not consult the
+        // waitlist, so a device freed by cancellation sat available while the
+        // queue for it stood still.
+        if ($deviceStatus === 'available') {
+            try {
+                Reservations::promoteNextForDevice($actor, $organizationId, (int) $result['device']['id']);
+            } catch (\Throwable $e) {
+                error_log('[loans] waitlist promotion after cancel failed: ' . $e->getMessage());
+            }
+        }
 
         return self::get($organizationId, $loanId);
     }

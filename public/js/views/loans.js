@@ -576,48 +576,69 @@ export async function openCheckoutDialog({ device = null, onDone = null } = {}) 
             );
           }
 
-          try {
-            const result = await api.checkOut(body);
-            const due = result.loan.due_at
-              ? `Due back ${formatDate(result.loan.due_at)}.`
-              : 'No return date (open-ended loan).';
+          // One function, so a refused hold can be retried with the override
+          // once the person at the desk has said so.
+          const perform = async (body) => {
+            try {
+              const result = await api.checkOut(body);
+              const due = result.loan.due_at
+                ? `Due back ${formatDate(result.loan.due_at)}.`
+                : 'No return date (open-ended loan).';
 
-            toastOk(`${result.loan.device_name} checked out. ${due}`, result.loan.reference);
-            announce(`Checked out ${result.loan.device_name}. ${due}`, { assertive: true });
+              toastOk(`${result.loan.device_name} checked out. ${due}`, result.loan.reference);
+              announce(`Checked out ${result.loan.device_name}. ${due}`, { assertive: true });
 
-            // Photos are attached after the loan exists, and never block it:
-            // the device has already gone out by this point.
-            if (photos && photos.count()) {
-              try {
-                await api.attachPhotos(result.loan.id, 'out', photos.getImages());
-              } catch (err) {
-                toastWarn(`The loan was recorded, but the photos did not attach: ${err.message}`);
+              // Photos are attached after the loan exists, and never block it:
+              // the device has already gone out by this point.
+              if (photos && photos.count()) {
+                try {
+                  await api.attachPhotos(result.loan.id, 'out', photos.getImages());
+                } catch (err) {
+                  toastWarn(`The loan was recorded, but the photos did not attach: ${err.message}`);
+                }
               }
-            }
 
-            if (result.notification && !result.notification.sent && result.notification.reason
-                && !result.notification.reason.includes('switched off')) {
-              toastWarn(`The loan was recorded, but no email was sent: ${result.notification.reason}`);
-            }
+              if (result.notification && !result.notification.sent && result.notification.reason
+                  && !result.notification.reason.includes('switched off')) {
+                toastWarn(`The loan was recorded, but no email was sent: ${result.notification.reason}`);
+              }
 
-            close(result.loan);
+              close(result.loan);
 
-            if (agreementSettings.enabled) {
-              await openAgreementDialog({
-                loan: result.loan,
-                required: agreementSettings.required,
-                allowWaive: agreementSettings.allowWaive,
-              });
-            }
+              if (agreementSettings.enabled) {
+                await openAgreementDialog({
+                  loan: result.loan,
+                  required: agreementSettings.required,
+                  allowWaive: agreementSettings.allowWaive,
+                });
+              }
 
-            onDone?.(result.loan);
-          } catch (err) {
-            if (err.field === 'device' || err.code === 'not_found') {
-              barcodeField.setError?.(err.message);
-              barcodeField.control?.focus();
+              onDone?.(result.loan);
+            } catch (err) {
+              if (err.code === 'device_held' && err.details?.can_override) {
+                // Held for somebody on the waitlist, or for an approved request.
+                // The desk did nothing wrong, so it is put as the decision it
+                // is: lend it to them, or to this person anyway — in which case
+                // the person it was held for goes back to the top of the queue.
+                const lendAnyway = await confirmDialog({
+                  title: `Held for ${err.details.held_for}`,
+                  message: err.message,
+                  confirmLabel: 'Lend it anyway',
+                  cancelLabel: 'Keep the hold',
+                  danger: true,
+                });
+                if (lendAnyway) await perform({ ...body, override_hold: true });
+                return;
+              }
+              if (err.field === 'device' || err.code === 'not_found') {
+                barcodeField.setError?.(err.message);
+                barcodeField.control?.focus();
+              }
+              toastError(err.message);
             }
-            toastError(err.message);
-          }
+          };
+
+          await perform(body);
         },
       },
     ],

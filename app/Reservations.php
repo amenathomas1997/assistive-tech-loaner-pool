@@ -50,7 +50,10 @@ final class Reservations
     {
         $organizationId = (int) $input['organizationId'];
         $requestedBy    = (int) $input['requestedBy'];
-        $deviceId       = $input['deviceId'] ?? null;
+        // A form's <select> sends "12", not 12, and findAvailableMatch() takes
+        // an ?int under strict_types. Normalised here so the waitlist form
+        // cannot produce a server error by being a form.
+        $deviceId       = Util::int($input['deviceId'] ?? null, 'device_id', 1);
         $category       = $input['category'] ?? null;
 
         if (!$deviceId && !$category) {
@@ -198,14 +201,26 @@ final class Reservations
 
             // Anyone waiting for this exact device outranks the category queue:
             // they asked for this unit specifically.
+            //
+            // needed_from and needed_to were stored and never read. Somebody
+            // who reserved a magnifier for a course starting in three weeks
+            // was promoted the day one came back, told to collect it within
+            // the hold window, and expired when they did not — their place
+            // gone before the course began. A hold is only offered to someone
+            // whose window has opened, or opens before the hold would lapse,
+            // and has not already closed.
+            $holdDays = max(1, (int) ceil($holdHours / 24));
+
             $candidate = Db::one(
                 'SELECT * FROM reservations
                   WHERE organization_id = ? AND status = "waiting"
                     AND (device_id = ? OR (device_id IS NULL AND category <=> ?))
+                    AND (needed_from IS NULL OR needed_from <= DATE_ADD(CURDATE(), INTERVAL ? DAY))
+                    AND (needed_to IS NULL OR needed_to >= CURDATE())
                   ORDER BY (device_id IS NULL) ASC, priority DESC, created_at ASC
                   LIMIT 1
                   FOR UPDATE',
-                [$organizationId, $deviceId, $device['category']],
+                [$organizationId, $deviceId, $device['category'], $holdDays],
             );
 
             if ($candidate === null) {
@@ -367,23 +382,58 @@ final class Reservations
         return self::get($organizationId, $reservationId);
     }
 
-    /** Mark a reservation as satisfied by a loan. */
-    public static function fulfil(?array $actor, int $organizationId, int $reservationId, int $loanId): ?array
+    /**
+     * Mark a reservation as satisfied by a loan.
+     *
+     * Called by Loans::checkOut from inside its transaction, when the device a
+     * hold was for goes out to the person it was held for. Until that call
+     * existed nothing invoked this at all, so every collected reservation sat
+     * at "ready" until the hold lapsed and it was recorded as expired — the
+     * waitlist's own history said nobody ever collected anything.
+     */
+    public static function markFulfilled(int $organizationId, int $reservationId, int $loanId): void
     {
-        Db::execute(
+        $changed = Db::execute(
             'UPDATE reservations
                 SET status = "fulfilled", fulfilled_loan_id = ?, closed_at = NOW(), updated_at = NOW()
-              WHERE id = ? AND organization_id = ?',
+              WHERE id = ? AND organization_id = ? AND status IN ("ready", "waiting")',
             [$loanId, $reservationId, $organizationId],
         );
 
-        Audit::record($actor, [
-            'organizationId' => $organizationId,
-            'action'         => Audit::RESERVATION_FULFILLED,
-            'entityType'     => 'reservation',
-            'entityId'       => $reservationId,
-            'summary'        => "Waitlist entry satisfied by loan {$loanId}",
-        ]);
+        if ($changed === 1) {
+            Audit::record(Audit::system($organizationId), [
+                'organizationId' => $organizationId,
+                'action'         => Audit::RESERVATION_FULFILLED,
+                'entityType'     => 'reservation',
+                'entityId'       => $reservationId,
+                'summary'        => "Waitlist entry satisfied by loan {$loanId}",
+                'detail'         => ['loan_id' => $loanId],
+            ]);
+        }
+    }
+
+    /**
+     * Put a held reservation back in the queue.
+     *
+     * For a hold that was overridden at the desk: the person did nothing
+     * wrong, so they keep their priority and their place by date, and the next
+     * matching return holds a device for them again.
+     */
+    public static function releaseHold(int $organizationId, int $reservationId): void
+    {
+        Db::execute(
+            'UPDATE reservations
+                SET status = "waiting", ready_device_id = NULL, claim_expires_at = NULL,
+                    notified_at = NULL, updated_at = NOW()
+              WHERE id = ? AND organization_id = ? AND status = "ready"',
+            [$reservationId, $organizationId],
+        );
+    }
+
+    /** @deprecated Use markFulfilled(); kept so an older caller does not fatally error. */
+    public static function fulfil(?array $actor, int $organizationId, int $reservationId, int $loanId): ?array
+    {
+        self::markFulfilled($organizationId, $reservationId, $loanId);
 
         return self::get($organizationId, $reservationId);
     }

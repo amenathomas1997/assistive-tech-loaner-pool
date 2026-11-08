@@ -42,7 +42,8 @@ final class Retention
                 . ' days are deleted.',
             ],
             'never_touched' => [
-                'A client with an open loan is never anonymised, however old the record.',
+                'A client with an open loan, an open request or a live waitlist entry is never '
+                . 'anonymised, however old the record.',
                 'Loans, devices and their history are never deleted.',
                 'Signed agreements are never deleted.',
             ],
@@ -92,7 +93,7 @@ final class Retention
             'audit_entries' => $auditCount,
             'email_records' => $emailCount,
             'sms_records'   => $smsCount,
-            'notice' => count($clients) === 0 && $auditCount === 0 && $emailCount === 0
+            'notice' => count($clients) === 0 && $auditCount === 0 && $emailCount === 0 && $smsCount === 0
                 ? 'Nothing is old enough to be removed under the current policy.'
                 : sprintf(
                     'A purge would anonymise %d client record%s and delete %d audit entr%s, '
@@ -108,9 +109,14 @@ final class Retention
     /**
      * Clients eligible for anonymisation.
      *
-     * "No activity" means no loan and no request within the window, measured
-     * from whichever is later. A client with an open loan is excluded whatever
-     * the dates say — they are holding equipment right now.
+     * "No activity" means no loan, no request and no waitlist entry within the
+     * window, measured from whichever is latest. A client with an open loan,
+     * an open request or a live waitlist entry is excluded whatever the dates
+     * say — they are holding equipment, or about to.
+     *
+     * The waitlist was not counted at first. A client who joined it yesterday
+     * after years away was eligible, and the "your device is ready" notice
+     * would have gone to an address that had just been blanked.
      */
     private static function clientsDue(int $organizationId, int $years): array
     {
@@ -123,6 +129,7 @@ final class Retention
                     GREATEST(
                         COALESCE((SELECT MAX(l.checked_out_at) FROM loans l WHERE l.client_id = c.id), 0),
                         COALESCE((SELECT MAX(r.created_at) FROM loan_requests r WHERE r.client_id = c.id), 0),
+                        COALESCE((SELECT MAX(w.created_at) FROM reservations w WHERE w.client_id = c.id), 0),
                         c.created_at
                     ) AS last_activity
                FROM clients c
@@ -131,6 +138,14 @@ final class Retention
                 AND NOT EXISTS (
                       SELECT 1 FROM loans l
                        WHERE l.client_id = c.id AND l.status = "active"
+                    )
+                AND NOT EXISTS (
+                      SELECT 1 FROM loan_requests r
+                       WHERE r.client_id = c.id AND r.status IN ("submitted", "approved")
+                    )
+                AND NOT EXISTS (
+                      SELECT 1 FROM reservations w
+                       WHERE w.client_id = c.id AND w.status IN ("waiting", "ready")
                     )
              HAVING last_activity < DATE_SUB(NOW(), INTERVAL ? YEAR)
               ORDER BY last_activity',
