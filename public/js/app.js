@@ -27,6 +27,7 @@ import { renderClients, renderPrograms, renderStaff } from './views/directory.js
 import { renderSettings, renderApiKeys, renderLoanPeriods } from './views/admin.js';
 import { renderAudit, renderReports } from './views/insights.js';
 import { renderKits, renderWaitlist, renderRepairs, renderRepairDetail } from './views/workshop.js';
+import { initTheme, openAppearanceDialog } from './theme.js';
 
 /** Shared state every view can read. Never mutated by views directly. */
 export const session = {
@@ -216,6 +217,19 @@ function buildShell() {
       ]),
 
       el('div', { class: 'header-actions', role: 'group', 'aria-label': 'Account' }, [
+        // In the header, not in settings. Somebody who cannot comfortably
+        // read this screen needs this control before they need anything else
+        // on it, and a preference three screens deep is one they have to read
+        // their way to first.
+        el('button', {
+          type: 'button',
+          class: 'header-btn',
+          onClick: openAppearanceDialog,
+        }, [
+          el('span', { 'aria-hidden': 'true' }, '◐'),
+          el('span', {}, 'Appearance'),
+        ]),
+
         // SC 3.2.6 Consistent Help: this control is in the same place on
         // every screen of the application.
         el('button', {
@@ -526,6 +540,21 @@ function showHelp() {
       // rather than buried in settings.
       shortcutToggle(),
       messageToggle(),
+
+      el('h3', { text: 'If the screen is hard to read' }),
+      el('p', {
+        text:
+          'The Appearance button at the top of every screen sets light, dark, or two colours of '
+          + 'your own — it measures the contrast between them and tells you what it meets. '
+          + 'Windows High Contrast and the equivalent setting on other systems are followed too, '
+          + 'and take precedence when they are switched on.',
+      }),
+      el('p', {}, [
+        el('button', {
+          type: 'button', class: 'btn btn-sm', onClick: openAppearanceDialog,
+        }, 'Change colours and contrast'),
+      ]),
+
       glossary(),
       el('h3', { text: 'Who to contact' }),
       el('p', {
@@ -846,6 +875,16 @@ function renderSignIn({ message = null } = {}) {
         message ? alertBox(message, { type: 'info' }) : null,
         errorRegion,
         form,
+      ]),
+
+      // Before sign-in, deliberately. Somebody who cannot read light text on
+      // a blue header cannot sign in to say so, and a colour setting that
+      // only exists behind the sign-in form is no use to the people it is
+      // for.
+      el('p', { class: 'signin-appearance' }, [
+        el('button', {
+          type: 'button', class: 'btn btn-ghost btn-sm', onClick: openAppearanceDialog,
+        }, [el('span', { 'aria-hidden': 'true' }, '◐ '), 'Change colours and contrast']),
       ]),
     ]),
   ]));
@@ -1204,6 +1243,12 @@ function resetTokenFromHash() {
 }
 
 async function boot() {
+  // theme-boot.js has already put the stored appearance on screen. This hands
+  // ownership back to the module that computed it, and starts listening for
+  // the device switching between light and dark — without which "follow this
+  // device" would stop following it until the next reload.
+  initTheme();
+
   const resetToken = resetTokenFromHash();
   if (resetToken) {
     renderResetPassword(resetToken);

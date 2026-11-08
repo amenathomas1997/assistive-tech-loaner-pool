@@ -17,7 +17,7 @@
  * check-outs could double-issue equipment.
  */
 
-const CACHE = 'loaner-shell-v1';
+const CACHE = 'loaner-shell-v2';
 
 /**
  * The shell only. Deliberately excludes anything under /api/ and any
@@ -26,10 +26,16 @@ const CACHE = 'loaner-shell-v1';
 const SHELL = [
   '/',
   '/index.html',
+  '/app.html',
   '/css/app.css',
+  // Loaded in <head> and blocking, so a miss here is the appearance flashing
+  // back to the default palette on every offline load.
+  '/js/theme-boot.js',
   '/js/app.js',
   '/js/api.js',
   '/js/ui.js',
+  '/js/theme.js',
+  '/js/shortcuts.js',
   '/js/capture.js',
   '/js/offline.js',
   '/js/views/dashboard.js',

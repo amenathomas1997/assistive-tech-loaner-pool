@@ -6,6 +6,16 @@
   <meta name="robots" content="noindex, nofollow">
   <title>Set up Loaner Pool</title>
   <link rel="stylesheet" href="/css/app.css">
+  <!--
+    Applies the saved appearance before the body is painted, so a chosen
+    palette does not flash the default one first. Must be here, blocking, and
+    on every page that loads app.css: the stylesheet keys its themes off a
+    data-theme attribute rather than a media query, and this is what sets it.
+
+    A file rather than an inline script because index.php sends
+    script-src 'self' with no 'unsafe-inline'.
+  -->
+  <script src="/js/theme-boot.js"></script>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>">
 </head>
 <body>

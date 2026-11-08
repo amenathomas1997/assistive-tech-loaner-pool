@@ -6,7 +6,10 @@ loaner pool is a particular kind of failure, and that is the standard this
 document holds the application to.
 
 It was audited against **WCAG 2.2 at Level AAA** on 7 November 2026, against
-the running application rather than the source, in both light and dark themes.
+the running application rather than the source, in both light and dark
+themes. It was re-measured on 8 November 2026 after the custom-colour theme
+was added, this time across fourteen screens in three themes — 5,508
+text-bearing elements in all.
 
 ---
 
@@ -18,8 +21,8 @@ Obscured, 2.5.7 Dragging Movements, 2.5.8 Target Size (Minimum), 3.3.8
 Accessible Authentication).
 
 **Level AAA: substantially met, but not claimed.** Of the 23 applicable AAA
-criteria, 20 pass, 2 pass only in part, and 1 is not met. The details are
-below, named individually, because "AAA" as a bare claim is not worth much.
+criteria, 21 pass and 2 pass only in part. The details are below, named
+individually, because "AAA" as a bare claim is not worth much.
 
 WCAG itself says so:
 
@@ -35,7 +38,9 @@ deploying this actually needs.
 
 ## What the audit found, and what was done about it
 
-Six things failed when measured. All six are fixed.
+Six things failed when the application was first measured. A second pass,
+after the custom-colour theme was built, found five more. All eleven are
+fixed.
 
 ### Two were Level AA failures
 
@@ -93,6 +98,52 @@ with no way to stop them. Somebody reading with a screen magnifier may be two
 words into a message when it goes. There is now a switch in the keyboard help,
 remembered per browser. Errors never auto-dismissed and still do not.
 
+### Five more, found building the colour theme
+
+Writing a theme that derives every colour from two of them meant reading the
+stylesheet token by token. That turned up things no screenshot would have.
+
+**An undefined token, used twice.** `var(--brand-ink)` appeared in two rules
+and was declared in no stylesheet. An undefined custom property is invalid at
+computed-value time, so `background: var(--brand-ink)` resolved to
+*transparent* — and the rule that used it set `color: #fff` over the top. That
+rule is the "Go to… press a letter" hint, which means the visible indicator
+for the keyboard shortcut mode was white text on the page background: invisible
+in the light theme, on the feature whose own source comment says "a mode nobody
+can see is a trap". The second use, `.linkish`, silently inherited its colour
+instead. There is now a `--link` token, declared in both palettes and checked
+on every surface, and the hint is drawn as `--text` on `--bg` — the highest
+contrast any theme has by definition, custom palettes included.
+
+**A count badge at 2.23:1.** `.badge-count` — the number of unread loan
+requests in the sidebar — was `#fff` on `var(--danger)`. In the light theme
+`--danger` is a deep red and white sits at 8.23:1. In the dark theme it is a
+pale salmon, so the same rule produced white on salmon: **below Level AA**, not
+merely below AAA. It is `var(--surface)` now, which is white in the light
+theme and therefore changes nothing there, and inverts correctly in the dark
+one.
+
+**The same mistake on the offline banner, and worse.** The queued-scan count
+was `#fff` on `var(--warn-border)`: **3.05:1 in the light theme**. This is the
+number of scans waiting for the network to come back — the one figure somebody
+needs to read at the moment the connection has dropped.
+
+**Muted text on seven tinted surfaces.** The contrast script checked body and
+muted text on the four plain surfaces and never on the eight tinted ones. On
+the brand tint behind a scan target, muted text was 6.18:1 in dark and 6.87:1
+on the danger tint in light. Both clear AA; neither clears the 7:1 of SC 1.4.6.
+`--text-muted` moved in both themes, the danger tint was lightened, and the
+script now checks every tinted surface — which is what took it from 58
+pairings to 132.
+
+**A token the custom theme forgot.** `--link` was added to both built-in
+palettes and to neither half of the derivation, so with a custom palette the
+footer link stayed navy — on black, at 1.71:1. Found by measuring the running
+page rather than by reading the code. The build now compares the stylesheet's
+colour tokens against the ones the custom theme derives and fails on any
+difference, because the failure mode is silent: a forgotten token does not go
+missing, it keeps its light-theme value.
+
 ### Also addressed
 
 - **1.4.8 Visual Presentation** — explanatory prose ran to 138 characters a
@@ -117,7 +168,7 @@ remembered per browser. Errors never auto-dismissed and still do not.
 
 ## Level AAA, criterion by criterion
 
-### Met (20)
+### Met (21)
 
 | Criterion | How |
 |---|---|
@@ -127,6 +178,7 @@ remembered per browser. Errors never auto-dismissed and still do not.
 | **1.2.9** Audio-only (Live) | Not applicable — no live audio |
 | **1.4.6** Contrast (Enhanced) | 58 pairings at ≥7:1, both themes, checked on every build |
 | **1.4.7** Low or No Background Audio | Not applicable — no audio |
+| **1.4.8** Visual Presentation | Line length capped at 70ch, never justified, line spacing 1.55, resizes to 200% without horizontal scroll, and the user can choose their own two colours |
 | **1.4.9** Images of Text (No Exception) | No images of text anywhere; the logo is inline SVG, every icon is `aria-hidden` beside real text |
 | **2.1.3** Keyboard (No Exception) | Nothing needs a pointer. Signing is three equal methods — type your name, draw, or photograph a signed sheet — with typing the default. Barcode scanning always has manual entry beside it |
 | **2.2.6** Timeouts | Sessions last 14 days with no inactivity timeout, so data persists far beyond the 20 hours the exception allows |
@@ -161,21 +213,17 @@ the fact by design — that is what makes the audit trail worth having — so
 "reversible" is not true of every submission in the sense the criterion means.
 This is a deliberate records-keeping decision, not an oversight.
 
-### Not met (1)
+### Not met (0)
 
-**1.4.8 Visual Presentation.** Four of its five requirements pass: line length
-is capped at 70ch, text is never justified, line spacing is 1.55 with
-paragraph spacing above it, and text resizes to 200% without horizontal
-scrolling.
+**1.4.8 Visual Presentation** was the one criterion this document recorded as
+not met. Four of its five requirements passed — line length capped at 70ch,
+text never justified, line spacing 1.55 with paragraph spacing above it, text
+resizing to 200% without horizontal scrolling — and the fifth did not: there
+was no way for the user to select their own foreground and background colours.
 
-The fifth — that the user can select foreground and background colours — is
-not provided *in the application*. There is no colour picker.
-
-What does exist: both light and dark themes following the system preference,
-and full support for `forced-colors: active`, so Windows High Contrast and
-equivalent platform settings work correctly and the page honours the user's
-own chosen colours. That is the mechanism most people actually use. It is not
-what the criterion asks for, and this document does not pretend otherwise.
+There is now. **Appearance**, in the header of every screen and under the
+sign-in form, offers light, dark, follow-the-device, or two colours of the
+user's own choosing. See *Choosing your own colours* below.
 
 ### Not assessed
 
@@ -191,16 +239,98 @@ Arguably not applicable; recorded as unassessed rather than passed.
 
 ---
 
+## Choosing your own colours
+
+**Appearance** sits in the header of every screen, and under the sign-in form
+— deliberately, because somebody who cannot read light text on a blue header
+cannot sign in to say so. A colour setting that only exists behind the sign-in
+form is no use to the people it is for.
+
+It offers four things: follow this device, light, dark, or two colours chosen
+by the user. The choice is remembered per browser rather than per account,
+because the colours somebody needs are a property of the screen they are
+sitting at and the light in the room, not of their user record — and because a
+shared machine at a front desk should not inherit whatever the last person
+needed.
+
+**It measures the pair and says what it meets**, live, as a number and in
+words: "16.6 to 1. Meets the highest standard (AAA) for body text", or "3.1 to
+1. Below the minimum of 4.5 to 1 — text may be hard to read." It does not
+refuse a pair that measures badly. The criterion exists to give the person the
+choice, and the person at the keyboard can see the screen; a script that
+overruled them would defeat the thing it was meant to serve.
+
+**Six starting points** are offered — black on white, white on black, yellow
+on black, black on cream, green on black, navy on pale blue. Not a palette: the
+combinations people actually ask for. Somebody who needs yellow on black is one
+click away rather than hunting through a colour wheel with the eyesight that
+brought them there. All six clear 7:1, and the build checks them.
+
+**Two ways to set each colour.** The swatch opens the platform picker, which
+is the easy path. The hex box beside it is not a convenience for developers:
+the native picker is a small, mouse-shaped target that some people cannot
+operate at all, and an optician's note or a support article gives a hex value.
+Either control drives the other, and `#abc`, `00F` and `#0000ff` are all
+accepted.
+
+### What custom mode gives up, and why
+
+Two colours in, a whole palette out: every surface is the chosen background or
+a measured step from it toward the foreground. That costs two things, both on
+purpose.
+
+**Muted text is not muted.** A derived grey cannot be guaranteed to clear 7:1
+— or even 4.5:1 — against an arbitrary background. Somebody who has chosen
+their own two colours has said legibility matters more than shading, so
+secondary text is the foreground colour exactly.
+
+**The status pills lose their hues.** Available, On loan, Overdue and In
+repair all end up the same two colours. This is only safe because SC 1.3.1 was
+already satisfied without colour: every pill carries its word, every status has
+a dot beside that word, the current nav item has a bar as well as a colour, and
+the tracker steps have glyphs. Nothing in this application was ever
+distinguishable by hue alone — which is exactly what makes a two-colour mode
+possible.
+
+A danger button and a primary button would also be identical, so in custom
+mode they differ by fill: the primary one is filled, the destructive one is
+outlined and underlined. The word on the button was always doing the work.
+
+### Windows High Contrast still wins
+
+`forced-colors: active` is supported in full, and when the platform setting is
+on it overrides all of this. For the people who have it configured that remains
+the better route, because it applies to every application at once. The
+in-application setting is for everybody else: a browser on a shared machine, a
+Chromebook, a locked-down desktop where the platform setting is not theirs to
+change.
+
+### How it is applied
+
+The theme is an attribute on the root element, not a media query. A small
+classic script in the `<head>` of every page resolves the stored preference —
+"follow this device" included — to a concrete value before the body is painted,
+so a chosen palette never flashes the default one first. For somebody who
+picked yellow on black because white backgrounds hurt, that flash is not a
+cosmetic detail.
+
+It is a separate file rather than an inline `<script>` because the policy in
+`index.php` is `script-src 'self'` with no `'unsafe-inline'`, and relaxing a
+content security policy to avoid a flash of colour would be a poor trade.
+
 ## What was verified, and how
 
 The audit ran against the application in a browser, signed in, on real seeded
 data — not against the source.
 
 - **Contrast** computed from the rendered colours of every text-bearing
-  element on thirteen screens in both themes, with gradients resolved to their
-  lightest stop. False positives from an early pass (white-on-gradient
-  reported as 1.07:1 because the computed `background-color` is transparent)
-  were traced and discarded rather than "fixed".
+  element, with gradients resolved to their stops. The second pass covered
+  fourteen screens in three themes — light, dark, and a custom yellow-on-black
+  — and measured **5,508 text elements, none below its threshold**. False
+  positives from an early pass (white-on-gradient reported as 1.07:1, because
+  the computed `background-color` of a gradient is transparent and the
+  measurement had walked up to the page behind it) were traced and discarded
+  rather than "fixed"; the resolver reads the gradient stops now.
 - **Target size** measured from `getBoundingClientRect` on every interactive
   element, with the 2.5.8 spacing exception checked separately: row checkboxes
   sit 36.5px apart with the nearest other target 52px away, so they would have
@@ -222,8 +352,13 @@ data — not against the source.
 Accessibility that is verified once decays. Two scripts run in
 `./scripts/reset-and-test.sh`:
 
-- `scripts/verify-contrast.mjs` — 58 colour pairings against their AA or AAA
-  threshold, read from the stylesheet so it cannot drift from what it checks.
+- `scripts/verify-contrast.mjs` — 132 colour pairings against their AA or AAA
+  threshold, read from the stylesheet so it cannot drift from what it checks:
+  body and muted text on all eleven surfaces, every status colour on its own
+  tint, both gradient ends of the header and the primary button, the two count
+  badges, and the six custom-theme starting points. It also compares the
+  stylesheet's colour tokens against the ones the custom theme derives, and
+  fails on any the derivation has forgotten.
 - `scripts/verify-ui-contract.sh` — every field the interface reads is present
   in the response it reads it from. Not an accessibility check as such, but
   the word "undefined" on screen is an accessibility failure like any other,
@@ -236,7 +371,15 @@ Accessibility that is verified once decays. Two scripts run in
   driven with NVDA, JAWS or VoiceOver. That is the next thing worth doing, and
   the one thing here no script can replace.
 - **Reading level unassessed**, as above.
-- **No in-application colour picker**, as above.
+- **Custom colours flatten two things on purpose**: text that is normally
+  muted is not muted, and the status pills lose their separate hues. Both are
+  described under *Choosing your own colours*. Neither is a conformance
+  failure — no information in this application was ever carried by colour
+  alone — but somebody evaluating it should know the trade was deliberate.
+- **Two surfaces stay white in every theme**: the QR code and the signature
+  pad. A QR code has to be dark-on-light to scan at all, and a signature
+  belongs on white. In a dark or custom theme they are bright patches, which
+  is a real cost and the right one.
 - **The browser's own camera scanner** depends on `BarcodeDetector` or the
   bundled decoder. Where neither works, manual entry is always available —
   which is the accessible path in any case.

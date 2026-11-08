@@ -35,6 +35,8 @@
 /* --- Design tokens ------------------------------------------------------- */
 
 :root {
+  /* Overridden per theme below. Left as a pair only for the instant before
+     theme-boot.js has set the attribute. */
   color-scheme: light dark;
 
   /* Palette: a calm slate-and-teal scheme. The deep blue reads as
@@ -63,8 +65,12 @@
   --border-focus:  #115677;
 
   --text:          #14181d;
-  --text-muted:    #49515c;
+  --text-muted:    #434a54;
   --text-inverse:  #ffffff;
+
+  /* Link text inside a sentence. Darker than --brand because it sits on
+     --surface-alt in the footer as well as on --surface. */
+  --link:          #0d4762;
 
   /* Status colours: the text variants clear 7:1 on their own tinted
      backgrounds and on --surface — WCAG 2.2 SC 1.4.6 Contrast (Enhanced),
@@ -78,7 +84,7 @@
   --warn-bg:       #fdf4e3;
   --warn-border:   #c08a1e;
   --danger:        #9a1c16;
-  --danger-bg:     #fce9e8;
+  --danger-bg:     #fdefee;
   --danger-border: #d6544c;
   --info:          #115677;
   --info-bg:       #e8f2f7;
@@ -107,51 +113,51 @@
   --sticky-offset: calc(var(--header-height) + 16px);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --brand:         #8bc3dd;
-    --brand-strong:  #8ac6e2;
-    --brand-bright:  #7dbcdd;
-    --brand-soft:    #16323f;
-    --brand-tint:    #12242c;
+:root[data-theme="dark"] {
+  --brand:         #8bc3dd;
+  --brand-strong:  #8ac6e2;
+  --brand-bright:  #7dbcdd;
+  --brand-soft:    #16323f;
+  --brand-tint:    #12242c;
 
-    --accent:        #64c7b3;
-    --accent-soft:   #10302b;
+  --accent:        #64c7b3;
+  --accent-soft:   #10302b;
 
-    --bg:            #101418;
-    --bg-gradient:   linear-gradient(180deg, #12171c 0%, #0e1216 100%);
-    --surface:       #191e24;
-    --surface-alt:   #20262d;
-    --surface-sunken:#0d1116;
+  --bg:            #101418;
+  --bg-gradient:   linear-gradient(180deg, #12171c 0%, #0e1216 100%);
+  --surface:       #191e24;
+  --surface-alt:   #20262d;
+  --surface-sunken:#0d1116;
 
-    --border:        #313941;
-    --border-strong: #64717f;
-    --border-focus:  #7dbcdd;
+  --border:        #313941;
+  --border-strong: #64717f;
+  --border-focus:  #7dbcdd;
 
-    --text:          #e9ecef;
-    --text-muted:    #a7b1bc;
-    --text-inverse:  #101418;
+  --text:          #e9ecef;
+  --text-muted:    #b8c2cd;
+  --text-inverse:  #101418;
 
-    --ok:            #63d090;
-    --ok-bg:         #10301e;
-    --ok-border:     #3f9c65;
-    --warn:          #e5b767;
-    --warn-bg:       #2f2611;
-    --warn-border:   #a8821f;
-    --danger:        #f4938c;
-    --danger-bg:     #351917;
-    --danger-border: #c25c55;
-    --info:          #8bc3dd;
-    --info-bg:       #16323f;
-    --info-border:   #47819f;
-    --neutral:       #b0b9c3;
-    --neutral-bg:    #262d35;
+  --link:          #8bc3dd;
 
-    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow:    0 1px 3px rgba(0, 0, 0, 0.5);
-    --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.55);
-    --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.7);
-  }
+  --ok:            #63d090;
+  --ok-bg:         #10301e;
+  --ok-border:     #3f9c65;
+  --warn:          #e5b767;
+  --warn-bg:       #2f2611;
+  --warn-border:   #a8821f;
+  --danger:        #f4938c;
+  --danger-bg:     #351917;
+  --danger-border: #c25c55;
+  --info:          #8bc3dd;
+  --info-bg:       #16323f;
+  --info-border:   #47819f;
+  --neutral:       #b0b9c3;
+  --neutral-bg:    #262d35;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow:    0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.7);
 }
 
 /* --- Reset --------------------------------------------------------------- */
@@ -293,12 +299,10 @@ a, button, input, select, textarea, summary,
   z-index: 40;
   box-shadow: var(--shadow-md);
 }
-@media (prefers-color-scheme: dark) {
-  .app-header {
-    background: linear-gradient(135deg, #151b21 0%, #1b232b 100%);
-    border-bottom: 1px solid var(--border);
-    color: var(--text);
-  }
+[data-theme="dark"] .app-header {
+  background: linear-gradient(135deg, #151b21 0%, #1b232b 100%);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
 }
 
 .app-header .brand {
@@ -323,9 +327,7 @@ a, button, input, select, textarea, summary,
   border-radius: 8px;
   flex: 0 0 auto;
 }
-@media (prefers-color-scheme: dark) {
-  .app-header .brand-mark { background: var(--brand-soft); border-color: var(--border); }
-}
+[data-theme="dark"] .app-header .brand-mark { background: var(--brand-soft); border-color: var(--border); }
 
 .header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
@@ -349,10 +351,8 @@ a, button, input, select, textarea, summary,
 }
 .header-btn:hover { background: rgba(255, 255, 255, 0.22); }
 .header-btn:focus-visible { outline-color: #fff; box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.28); }
-@media (prefers-color-scheme: dark) {
-  .header-btn { background: var(--surface-alt); border-color: var(--border); color: var(--text); }
-  .header-btn:hover { background: var(--brand-soft); }
-}
+[data-theme="dark"] .header-btn { background: var(--surface-alt); border-color: var(--border); color: var(--text); }
+[data-theme="dark"] .header-btn:hover { background: var(--brand-soft); }
 
 .user-chip {
   display: inline-flex; align-items: center; gap: 9px;
@@ -369,9 +369,7 @@ a, button, input, select, textarea, summary,
   font-size: 0.78rem; font-weight: 700; letter-spacing: 0.02em;
   flex: 0 0 auto;
 }
-@media (prefers-color-scheme: dark) {
-  .avatar { background: var(--brand-soft); border-color: var(--border); }
-}
+[data-theme="dark"] .avatar { background: var(--brand-soft); border-color: var(--border); }
 
 .app-body { display: flex; flex: 1 1 auto; min-height: 0; }
 
@@ -429,7 +427,7 @@ a, button, input, select, textarea, summary,
 .badge-count {
   margin-left: auto;
   background: var(--danger);
-  color: #fff;
+  color: var(--surface);
   border-radius: 999px;
   min-width: 21px;
   padding: 1px 7px;
@@ -590,16 +588,12 @@ a.stat:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md);
   background: var(--brand-strong);
   border-color: var(--brand-strong);
 }
-@media (prefers-color-scheme: dark) {
-  .btn-primary { background: var(--brand); border-color: var(--brand); color: var(--text-inverse); }
-  .btn-primary:hover:not(:disabled) { background: var(--brand-strong); }
-}
+[data-theme="dark"] .btn-primary { background: var(--brand); border-color: var(--brand); color: var(--text-inverse); }
+[data-theme="dark"] .btn-primary:hover:not(:disabled) { background: var(--brand-strong); }
 
 .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn-danger:hover:not(:disabled) { filter: brightness(0.9); background: var(--danger); }
-@media (prefers-color-scheme: dark) {
-  .btn-danger { color: var(--text-inverse); }
-}
+[data-theme="dark"] .btn-danger { color: var(--text-inverse); }
 
 .btn-ghost { background: transparent; border-color: transparent; box-shadow: none; }
 .btn-ghost:hover:not(:disabled) { background: var(--surface-alt); border-color: var(--border); }
@@ -790,8 +784,8 @@ body[data-goto]::after {
   z-index: 90;
   padding: 10px 18px;
   border-radius: var(--radius-sm);
-  background: var(--brand-ink);
-  color: #fff;
+  background: var(--text);
+  color: var(--bg);
   font-weight: 600;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
 }
@@ -833,7 +827,7 @@ kbd {
   border: 0;
   padding: 0;
   font: inherit;
-  color: var(--brand-ink);
+  color: var(--link);
   text-decoration: underline;
   cursor: pointer;
   /* Still a 24px target even though it reads as a link in a sentence. */
@@ -1282,8 +1276,8 @@ dialog.modal.modal-wide { max-width: min(960px, calc(100vw - 32px)); }
   flex-wrap: wrap;
 }
 .offline-banner .queue-count {
-  background: var(--warn-border);
-  color: #fff;
+  background: var(--warn);
+  color: var(--surface);
   border-radius: 999px;
   padding: 1px 9px;
   font-size: 0.8rem;
@@ -1359,6 +1353,143 @@ dialog.modal.modal-wide { max-width: min(960px, calc(100vw - 32px)); }
   .header-actions .header-btn span:not(.visually-hidden) { display: none; }
   .pair-code { font-size: 1.9rem; }
 }
+
+/* --- Appearance ---------------------------------------------------------- */
+
+/* The theme is an attribute, not a media query.
+   theme-boot.js resolves the stored preference — including "follow this
+   device" — to a concrete value before the body is painted, so there is never
+   a moment when both a media query and an attribute could apply, and each
+   theme needs exactly one selector.
+
+   WCAG 2.2 SC 1.4.8 Visual Presentation (Level AAA) asks that the user be able
+   to select foreground and background colours for blocks of text. Following
+   prefers-color-scheme is not that: it offers two palettes somebody else
+   chose. The custom theme below is, and theme.js derives its whole token set
+   from the two colours the user picked. */
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
+
+/* Custom theme: the parts that are not tokens.
+   Every token is set inline on the root element by theme.js, so these rules
+   only cover places where a colour was written into the rule itself — almost
+   all of them white text over a brand gradient, which in a palette the user
+   chose could be white on yellow. */
+
+:root[data-theme="custom"] .app-header {
+  background: var(--surface-alt);
+  color: var(--text);
+  /* Two pixels, not one: the header's separation from the page came from a
+     shadow, and custom mode has no shadows. */
+  border-bottom: 2px solid var(--border-strong);
+}
+:root[data-theme="custom"] .app-header .brand:focus-visible,
+:root[data-theme="custom"] .header-btn:focus-visible {
+  outline-color: var(--border-focus);
+  box-shadow: none;
+}
+:root[data-theme="custom"] .app-header .brand-mark,
+:root[data-theme="custom"] .header-btn,
+:root[data-theme="custom"] .avatar {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+:root[data-theme="custom"] .header-btn:hover { background: var(--brand-soft); }
+
+:root[data-theme="custom"] .brand-mark-lg {
+  background: var(--surface-alt);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+}
+
+/* Filled and outlined, rather than two colours.
+   In custom mode every status token is the chosen foreground, so a danger
+   button and a primary button would be identical. The difference is carried
+   by fill instead — and by the word on the button, which was always the
+   thing doing the work (SC 1.3.1). */
+:root[data-theme="custom"] .btn-primary {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+:root[data-theme="custom"] .btn-primary:hover:not(:disabled) {
+  background: var(--text);
+  filter: none;
+}
+:root[data-theme="custom"] .btn-danger {
+  background: var(--bg);
+  border: 2px solid var(--text);
+  color: var(--text);
+  text-decoration: underline;
+}
+:root[data-theme="custom"] .btn-danger:hover:not(:disabled) {
+  background: var(--surface-alt);
+  filter: none;
+}
+:root[data-theme="custom"] .badge-count,
+:root[data-theme="custom"] .offline-banner .queue-count {
+  background: var(--text);
+  color: var(--bg);
+}
+
+/* Surfaces are the background colour in custom mode, so what separated a card
+   from the page — a fill and a shadow — is gone. The border carries it. */
+:root[data-theme="custom"] :is(.card, .stat, .modal, .toast, .table-wrap) {
+  border-color: var(--border-strong);
+}
+
+/* --- The appearance dialog ----------------------------------------------- */
+
+.colour-fields {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.colour-inputs { display: flex; gap: 10px; align-items: center; }
+
+/* A native colour swatch is a 44px target like everything else (SC 2.5.5). */
+.colour-inputs input[type="color"] {
+  width: 56px;
+  min-height: 44px;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+/* The swatch opens the platform picker, which not everybody can operate. The
+   hex box is the keyboard route to the same setting (SC 2.1.1). */
+.hex-input {
+  width: 9em;
+  font-family: var(--mono);
+  flex: 0 0 auto;
+}
+
+.preset-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* The appearance link under the sign-in form. */
+.signin-appearance { text-align: center; margin: 14px 0 0; }
+.preset-label { font-weight: 620; font-size: 0.92rem; }
+
+/* The measured ratio, stated in words as well as a number. Bordered rather
+   than merely tinted, because in a custom palette the tint is derived from
+   the very colours being judged. */
+.contrast-readout {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-alt);
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.contrast-readout.contrast-ok     { border-color: var(--ok-border);     background: var(--ok-bg); }
+.contrast-readout.contrast-warn   { border-color: var(--warn-border);   background: var(--warn-bg); }
+.contrast-readout.contrast-danger { border-color: var(--danger-border); background: var(--danger-bg); }
 
 /* Windows High Contrast Mode: restore boundaries conveyed only by background
    colour, and keep the focus ring visible against forced colours. */
