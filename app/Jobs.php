@@ -289,9 +289,42 @@ final class Jobs
 
         $cronHealthy = $lastCron !== null && strtotime((string) $lastCron) > time() - 36 * 3600;
 
+        // The most recent successful run FROM CRON specifically, because the
+        // sentence it appears in is "reminders are running" — and that is only
+        // true of cron. Counting a manual "Run now" here would let an
+        // administrator who pressed the button an hour ago see a healthy panel
+        // over a cron entry that has not fired in a month, which is exactly the
+        // failure this screen exists to make visible.
+        $lastSuccess = Db::one(
+            'SELECT id, job_name, status, started_at, finished_at, summary, triggered_by
+               FROM job_runs
+              WHERE (organization_id = ? OR organization_id IS NULL)
+                AND status = "ok" AND triggered_by = "cron"
+              ORDER BY id DESC LIMIT 1',
+            [$organizationId],
+        );
+
+        // Reported separately so the panel can still say when somebody last
+        // ran it by hand, without that standing in for cron working.
+        $lastManual = Db::one(
+            'SELECT id, job_name, status, started_at, summary
+               FROM job_runs
+              WHERE (organization_id = ? OR organization_id IS NULL)
+                AND status = "ok" AND triggered_by <> "cron"
+              ORDER BY id DESC LIMIT 1',
+            [$organizationId],
+        );
+
         return [
             'jobs'    => $jobs,
             'history' => $history,
+            // The run log, under the name the settings screen reads it by.
+            'runs'    => $history,
+            // Healthy means cron has run recently enough to be trusted, not
+            // merely that something ran once.
+            'healthy'      => $cronHealthy,
+            'last_success' => $lastSuccess,
+            'last_manual'  => $lastManual,
             // Stated explicitly so nobody assumes the app reminds people on its
             // own. A PHP request ends when the response is sent, so there is
             // nowhere for a timer to live: without cron, no reminder is ever
@@ -343,6 +376,18 @@ final class Jobs
                 '0 7 * * * %s %s --quiet',
                 $php, escapeshellarg(APP_ROOT . '/bin/run-jobs.php'),
             ),
+            // The dialog shows one line and one sentence. Which line depends
+            // on where cron runs: prefer the command-line form, because it
+            // needs no network and no token, and fall back to curl only when
+            // PHP cannot be located on this host.
+            'crontab' => $php === 'php'
+                ? sprintf('0 7 * * * curl -fsS -X POST -H %s %s > /dev/null 2>&1',
+                    escapeshellarg("X-Cron-Token: {$token}"), escapeshellarg($url))
+                : sprintf('0 7 * * * %s %s --quiet',
+                    $php, escapeshellarg(APP_ROOT . '/bin/run-jobs.php')),
+            'note' => 'Paste this into cPanel → Cron Jobs, set to run once per day. '
+                    . 'Until it is in place, no due-soon or overdue reminder is ever sent — '
+                    . 'nothing inside the application schedules itself.',
             'notes' => [
                 'Run it once a day. Seven in the morning means notices are waiting when people start work.',
                 'The request carries the token in an X-Cron-Token header because cron has no session. '

@@ -1,7 +1,8 @@
-# Runtime configuration and uploads.
+# Runtime configuration, uploads and update artefacts.
 # config.json holds database credentials and the key that encrypts stored
-# secrets; uploads/ holds client condition photos and signatures. Neither
-# belongs in version control, ever.
+# secrets; uploads/ holds client condition photos and signatures; and the
+# updater writes version.json and backup-*.zip here. None of it belongs in
+# version control, ever.
 data/
 
 node_modules/

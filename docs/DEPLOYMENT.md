@@ -292,9 +292,17 @@ To apply it, on the server:
 php /home/<account>/loanerpool-src/bin/update.php --apply
 ```
 
-That pulls the new code and runs any database migrations, printing what it did.
-Back up the database and `data/` first. If the checkout has local edits it
-refuses and tells you, rather than overwriting them.
+That installs the new code and runs any database migrations, printing what it
+did. It works whether you cloned the project or uploaded it as files — an
+uploaded install has its files replaced from a GitHub archive pinned to the
+exact commit, with a backup ZIP written into `data/` first.
+
+Your `data/` directory is never touched, so the configuration file and every
+uploaded photo and signature stay where they are. Back up the database as well
+before running it; the updater does not.
+
+If you cloned and the checkout has local edits, it refuses and tells you rather
+than overwriting them.
 
 Applying is deliberately not possible from the browser. A web page that could
 pull code and change the schema is a way into the server the day its

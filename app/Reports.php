@@ -33,11 +33,19 @@ final class Reports
             [$organizationId],
         );
 
+        // Two "due soon" figures, deliberately. due_soon follows the
+        // configured reminder window, because that is what the reminder job
+        // will act on. due_within_7_days is a fixed week, because the dashboard
+        // card says "Due within 7 days" and a card whose label and number
+        // disagree is worse than no card.
         $loans = Db::one(
             'SELECT SUM(status = "active") AS active,
                     SUM(status = "active" AND due_at IS NOT NULL AND due_at < NOW()) AS overdue,
                     SUM(status = "active" AND due_at IS NOT NULL
                         AND due_at >= NOW() AND due_at <= DATE_ADD(NOW(), INTERVAL ? DAY)) AS due_soon,
+                    SUM(status = "active" AND due_at IS NOT NULL
+                        AND due_at >= NOW() AND due_at <= DATE_ADD(NOW(), INTERVAL 7 DAY))
+                        AS due_within_7_days,
                     SUM(status = "returned" AND returned_at >= DATE_SUB(NOW(), INTERVAL 30 DAY))
                         AS returned_30d,
                     SUM(checked_out_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) AS issued_30d
@@ -70,7 +78,11 @@ final class Reports
         $checkedOut = (int) $devices['checked_out'];
 
         return [
-            'devices' => array_map('intval', $devices),
+            // Utilisation belongs on the device block: it is a property of the
+            // pool, and the dashboard reads it from there.
+            'devices' => array_map('intval', $devices) + [
+                'utilisation_percent' => $total === 0 ? 0.0 : round($checkedOut / $total * 100, 1),
+            ],
             'loans'   => array_map('intval', $loans),
             'requests' => array_map('intval', $requests),
             'reservations' => [
@@ -78,7 +90,6 @@ final class Reports
                 'ready'   => (int) $other['ready_reservations'],
             ],
             'repairs' => ['open' => (int) $other['open_repairs']],
-            'utilisation_percent' => $total === 0 ? 0.0 : round($checkedOut / $total * 100, 1),
             'generated_at' => date('c'),
         ];
     }

@@ -35,10 +35,15 @@ foreach (array_slice($argv, 1) as $argument) {
 }
 
 if (isset($options['help'])) {
-    echo "Usage: php bin/update.php [--apply] [--quiet]\n\n";
-    echo "  (no flags)  check whether an update is available\n";
-    echo "  --apply     pull the update and run database migrations\n";
-    echo "  --quiet     only print when there is something to say\n\n";
+    echo "Usage: php bin/update.php [--apply] [--quiet] [--no-backup]\n\n";
+    echo "  (no flags)   check whether an update is available\n";
+    echo "  --apply      install the update and run database migrations\n";
+    echo "  --quiet      only print when there is something to say\n";
+    echo "  --no-backup  skip the backup (file installs only; not advised)\n\n";
+    echo "Works whether the application was cloned with git or uploaded as\n";
+    echo "files. A clone is updated with git pull; an uploaded install has its\n";
+    echo "files replaced from a GitHub archive pinned to the exact commit.\n";
+    echo "Either way, data/ is left alone.\n\n";
     echo "Source: https://github.com/" . Updates::REPOSITORY . "\n";
     exit(0);
 }
@@ -56,7 +61,7 @@ if (isset($options['apply'])) {
     echo "Updating " . APP_ROOT . "\n\n";
 
     try {
-        $result = Updates::apply();
+        $result = Updates::apply(['skipBackup' => isset($options['no-backup'])]);
     } catch (\Throwable $e) {
         fwrite(STDERR, "Update failed: " . $e->getMessage() . "\n");
         exit(1);
@@ -81,7 +86,7 @@ $local  = $result['local'];
 
 $say('This installation');
 $say('  version        ' . $local['app_version'] . ' (schema ' . $local['schema_version'] . ')');
-$say('  installed from ' . ($local['install_method'] === 'git' ? 'a git clone' : 'files'));
+$say('  installed from ' . ($local['install_method'] === 'git' ? 'a git clone' : 'uploaded files'));
 
 if ($local['commit_short'] !== null) {
     $say('  commit         ' . $local['commit_short']

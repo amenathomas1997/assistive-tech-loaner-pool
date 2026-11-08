@@ -165,15 +165,31 @@ apply it. **Settings → Software updates** does the same check in the browser.
 php bin/update.php --apply
 ```
 
-Pulls the update and runs any database migrations. Applying is command-line
-only on purpose: a web page that could pull code and change the schema would be
-a way in the day its credentials leaked, and this is software for agencies who
-would not spot that happening.
+Installs the update and runs any database migrations. It works both ways the
+application gets deployed:
 
-It refuses rather than forces — an unclean checkout, a branch that cannot
-fast-forward, or `exec()` disabled all stop it with an explanation instead of a
-half-applied update. `--quiet` prints only when there is something to say, so
-`php bin/update.php --quiet` suits a weekly cron entry.
+- **Cloned with git** — `git pull --ff-only`, refusing rather than forcing if
+  the checkout is unclean or the branch cannot fast-forward.
+- **Uploaded as files** — the normal case on cPanel. It downloads the release
+  from GitHub pinned to the exact commit it just told you about, refuses
+  anything that does not look like this application, writes a backup ZIP into
+  `data/`, replaces the files, and records the installed commit so the next
+  check knows where it stands. No git binary and a disabled `exec()` are both
+  fine.
+
+`data/` is never touched either way: your configuration, uploaded photos and
+signatures stay exactly where they are.
+
+Applying is command-line only on purpose. A web page that could pull code and
+change the schema would be a way in the day its credentials leaked, and this is
+software for agencies who would not spot that happening.
+
+`--quiet` prints only when there is something to say, so
+`php bin/update.php --quiet` suits a weekly cron entry. `--no-backup` skips the
+backup on a file install, which is not advised.
+
+There is no signature checking. The integrity story is HTTPS to GitHub and a
+URL pinned to a commit hash — stated plainly rather than implied.
 
 Nothing about this installation is sent: the check is a request for the latest
 version number, with a User-Agent that names the software and not the site.

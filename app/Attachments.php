@@ -444,6 +444,13 @@ final class Attachments
             [$organizationId],
         );
 
+        // Update backups live in data/ too and can be larger than the photos.
+        // Counted separately so "your photos are using 40 MB" stays true.
+        $backupBytes = 0;
+        foreach ((array) glob(Config::dataDir() . '/backup-*.zip') as $backup) {
+            $backupBytes += (int) @filesize($backup);
+        }
+
         $byKind = Db::all(
             'SELECT kind, COUNT(*) AS file_count, COALESCE(SUM(byte_size), 0) AS total_bytes
                FROM attachments WHERE organization_id = ?
@@ -458,14 +465,29 @@ final class Attachments
         $uploads = Config::uploadsDir();
         $free    = is_dir($uploads) ? @disk_free_space($uploads) : false;
 
+        $bytes = (int) $totals['total_bytes'];
+
         return [
             'file_count'  => (int) $totals['file_count'],
-            'total_bytes' => (int) $totals['total_bytes'],
-            'total_human' => self::humanSize((int) $totals['total_bytes']),
+            // Same numbers under the short names the settings screen reads.
+            // Megabytes rather than bytes there because the question being
+            // answered is "is this a problem for my hosting plan?".
+            'files'       => (int) $totals['file_count'],
+            'megabytes'   => round($bytes / 1048576, 1),
+            'total_bytes' => $bytes,
+            'total_human' => self::humanSize($bytes),
             'by_kind'     => $byKind,
             'disk_free'   => $free === false ? null : (int) $free,
             'disk_free_human' => $free === false ? null : self::humanSize((int) $free),
             'photos_enabled'  => (bool) Settings::get($organizationId, 'photos.enabled'),
+            'update_backups'  => [
+                'bytes'  => $backupBytes,
+                'human'  => self::humanSize($backupBytes),
+                'notice' => $backupBytes === 0
+                    ? null
+                    : 'Update backups in data/ are using ' . self::humanSize($backupBytes)
+                      . '. They are safe to delete once an update has proved itself.',
+            ],
         ];
     }
 

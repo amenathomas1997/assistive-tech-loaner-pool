@@ -321,7 +321,12 @@ echo "Reports"
 
 OUT=$(api GET /api/v1/reports/summary)
 check "summary counts devices" "$OUT" '"total": *5'
-check "summary reports utilisation" "$OUT" "utilisation_percent"
+# Checked as a nested path, not a bare grep: utilisation_percent sitting at
+# the top level satisfied a substring match while the dashboard read it from
+# devices.* and rendered "undefined%".
+check "summary reports utilisation under devices" "$OUT" \
+  '"devices":[^}]*"utilisation_percent"'
+check "summary reports a fixed 7-day due figure" "$OUT" "due_within_7_days"
 
 OUT=$(api GET /api/v1/reports/devices)
 check "device utilisation report returns rows" "$OUT" "loan_count"

@@ -43,6 +43,47 @@ final class Updates
         return Config::dataDir() . '/update-check.json';
     }
 
+    /**
+     * Where a non-git install records which commit it is running.
+     *
+     * A git checkout knows this already. An install that was uploaded as files
+     * has no history to ask, so the updater writes down what it put there —
+     * which is what lets "is there an update?" give a real answer on a cPanel
+     * account rather than shrugging.
+     *
+     * Kept in data/ rather than in the tree, because everything in the tree is
+     * replaced on the next update.
+     */
+    private static function stampPath(): string
+    {
+        return Config::dataDir() . '/version.json';
+    }
+
+    private static function readStamp(): ?array
+    {
+        $raw = @file_get_contents(self::stampPath());
+
+        if ($raw === false) {
+            return null;
+        }
+
+        $stamp = json_decode($raw, true);
+
+        return is_array($stamp) && !empty($stamp['commit']) ? $stamp : null;
+    }
+
+    private static function writeStamp(string $commit, ?string $subject): void
+    {
+        @file_put_contents(self::stampPath(), json_encode([
+            'commit'       => $commit,
+            'subject'      => $subject,
+            'app_version'  => APP_VERSION,
+            'applied_at'   => date('c'),
+        ], JSON_PRETTY_PRINT));
+
+        @chmod(self::stampPath(), 0640);
+    }
+
     // -----------------------------------------------------------------------
     // Local state
     // -----------------------------------------------------------------------
@@ -69,9 +110,16 @@ final class Updates
 
             // Local edits matter: pulling over them either conflicts or
             // silently discards somebody's fix, and they should be told which
-                // before anything is applied.
+            // before anything is applied.
             $status = self::git($root, 'status --porcelain');
             $dirty  = $status === null ? null : ($status !== '');
+        }
+
+        // No git, or git present but unusable (exec disabled): fall back to
+        // what a previous file update wrote down.
+        if ($commit === null) {
+            $stamp  = self::readStamp();
+            $commit = $stamp['commit'] ?? null;
         }
 
         return [
@@ -294,14 +342,15 @@ final class Updates
             return [
                 'method' => 'files',
                 'steps'  => [
-                    'This installation was not cloned, so there is no in-place update.',
-                    'Download the latest ZIP from github.com/' . self::REPOSITORY,
-                    'Back up ' . $root . '/data first — it holds your configuration and uploads.',
-                    'Replace everything except data/, then open any page so the migrations run.',
+                    'Back up the database.',
+                    'Run the command below on the server. It downloads the new version from '
+                    . 'GitHub, keeps your data/ directory, and runs any database migrations.',
+                    'Your configuration and uploaded photos are not touched.',
                 ],
-                'command' => null,
-                'notice'  => 'Cloning instead of unzipping makes future updates a single command. '
-                           . 'It is worth doing once.',
+                'command' => sprintf('php %s --apply', escapeshellarg($root . '/bin/update.php')),
+                'notice'  => 'This installation was uploaded rather than cloned, so the updater '
+                           . 'replaces the files itself. It takes a backup first and tells you where '
+                           . 'it put it.',
             ];
         }
 
@@ -333,7 +382,7 @@ final class Updates
      * and anything else is a judgement for the person at the keyboard. Nothing
      * here is reachable from the web.
      */
-    public static function apply(): array
+    public static function apply(array $options = []): array
     {
         if (PHP_SAPI !== 'cli') {
             throw new \RuntimeException('Updates can only be applied from the command line.');
@@ -342,18 +391,11 @@ final class Updates
         $local = self::local();
         $log   = [];
 
-        if ($local['install_method'] !== 'git') {
-            throw new \RuntimeException(
-                'This installation was not cloned from git, so it cannot update itself. '
-                . 'Replace the files by hand, keeping data/.',
-            );
-        }
-
-        if ($local['commit'] === null) {
-            throw new \RuntimeException(
-                'git is present but not usable here — exec() may be disabled in this PHP '
-                . 'configuration. Run "git pull" yourself in ' . $local['root'] . '.',
-            );
+        // No git, or git present but unusable: replace the files directly.
+        // This is the common case on cPanel, where the project was uploaded as
+        // a ZIP and exec() is often disabled.
+        if ($local['install_method'] !== 'git' || self::git($local['root'], 'rev-parse HEAD') === null) {
+            return self::applyFromArchive($local, $options);
         }
 
         if ($local['has_local_changes'] === true) {
@@ -410,12 +452,297 @@ final class Updates
         ];
     }
 
+    /**
+     * Update an installation that was uploaded rather than cloned.
+     *
+     * Downloads the exact commit the check reported — pinned by SHA, not by
+     * branch name, so what is installed is what was inspected — verifies the
+     * archive really is this application, backs up the current files, then
+     * replaces them. data/ is never touched.
+     *
+     * There is no signature checking. The integrity story is HTTPS to GitHub
+     * plus a SHA-pinned URL, and that is stated plainly rather than implied.
+     */
+    private static function applyFromArchive(array $local, array $options = []): array
+    {
+        $root = $local['root'];
+        $log  = [];
+
+        if (!is_writable($root)) {
+            throw new \RuntimeException(
+                "The application directory is not writable: {$root}. The web server user needs write "
+                . 'access there to replace the files.',
+            );
+        }
+
+        // 1. What should we be installing?
+        $check = self::check(true);
+
+        if (($check['reachable'] ?? false) !== true) {
+            throw new \RuntimeException($check['summary'] . ' ' . ($check['detail'] ?? ''));
+        }
+
+        $target  = $check['latest']['commit'] ?? null;
+        $subject = $check['latest']['subject'] ?? null;
+
+        if ($target === null) {
+            throw new \RuntimeException('GitHub did not report a current version.');
+        }
+
+        if ($local['commit'] === $target) {
+            return [
+                'ok' => true, 'from' => substr($target, 0, 7), 'to' => substr($target, 0, 7),
+                'changed' => false, 'log' => ['Already on the latest version.'],
+            ];
+        }
+
+        $log[] = 'Updating to ' . substr($target, 0, 7) . ($subject !== null ? ": {$subject}" : '');
+
+        // 2. Fetch it, pinned to that exact commit.
+        $workspace = Config::dataDir() . '/update-' . bin2hex(random_bytes(6));
+
+        if (!@mkdir($workspace, 0700, true)) {
+            throw new \RuntimeException("Could not create a working directory at {$workspace}.");
+        }
+
+        try {
+            $extracted = self::downloadAndExtract($target, $workspace, $log);
+
+            // 3. Refuse anything that is not recognisably this application,
+            //    rather than emptying someone's site over a redirect page.
+            foreach (['public/index.php', 'app/bootstrap.php', 'schema.sql', 'bin/update.php'] as $marker) {
+                if (!is_file($extracted . '/' . $marker)) {
+                    throw new \RuntimeException(
+                        "The downloaded archive does not look like Loaner Pool ({$marker} is missing). "
+                        . 'Nothing has been changed.',
+                    );
+                }
+            }
+            $log[] = 'Downloaded and verified the new version.';
+
+            // 4. Back up what is about to be overwritten.
+            if (empty($options['skipBackup'])) {
+                $backup = self::backup($root, $log);
+                $log[]  = 'Backup written to ' . $backup;
+            } else {
+                $log[] = 'Backup skipped at your request.';
+            }
+
+            // 5. Replace.
+            $replaced = self::replaceFiles($extracted, $root);
+            $log[]    = "Replaced {$replaced} file(s).";
+
+            self::writeStamp($target, $subject);
+        } finally {
+            self::removeTree($workspace);
+        }
+
+        // 6. Bring the database up to the schema the new code expects.
+        if (Config::isInstalled()) {
+            Db::reset();
+
+            $from      = Migrations::currentVersion();
+            $migration = Migrations::run();
+            $to        = Migrations::currentVersion();
+
+            $log[] = $from === $to
+                ? "Database schema already at version {$to}."
+                : "Database schema upgraded from version {$from} to {$to}.";
+
+            foreach (($migration['log'] ?? []) as $line) {
+                $log[] = '  ' . $line;
+            }
+        }
+
+        self::clearCache();
+
+        return [
+            'ok'      => true,
+            'from'    => $local['commit'] === null ? 'unknown' : substr($local['commit'], 0, 7),
+            'to'      => substr($target, 0, 7),
+            'changed' => true,
+            'log'     => $log,
+        ];
+    }
+
+    /** Fetch the commit as an archive and unpack it. Returns the source root. */
+    private static function downloadAndExtract(string $commit, string $workspace, array &$log): string
+    {
+        $url     = sprintf('https://codeload.github.com/%s/zip/%s', self::REPOSITORY, $commit);
+        $archive = $workspace . '/release.zip';
+
+        [$status, $body] = self::httpGet($url, 120);
+
+        if ($status !== 200 || $body === '') {
+            throw new \RuntimeException("Could not download the update (HTTP {$status}).");
+        }
+
+        if (@file_put_contents($archive, $body) === false) {
+            throw new \RuntimeException("Could not write the download to {$archive}.");
+        }
+
+        if (!class_exists('ZipArchive')) {
+            throw new \RuntimeException(
+                'The zip extension is not available on this server, so the update cannot be unpacked. '
+                . 'Enable it in your hosting control panel, or update the files by hand.',
+            );
+        }
+
+        $zip = new \ZipArchive();
+
+        if ($zip->open($archive) !== true) {
+            throw new \RuntimeException('The downloaded archive could not be opened.');
+        }
+
+        if (!$zip->extractTo($workspace)) {
+            $zip->close();
+            throw new \RuntimeException('The downloaded archive could not be unpacked.');
+        }
+
+        $zip->close();
+
+        // GitHub wraps everything in one directory named repo-<sha>.
+        foreach ((array) glob($workspace . '/*', GLOB_ONLYDIR) as $candidate) {
+            if (is_file($candidate . '/app/bootstrap.php')) {
+                return $candidate;
+            }
+        }
+
+        throw new \RuntimeException('The archive did not contain the application.');
+    }
+
+    /**
+     * Copy a ZIP of the current files aside before replacing them.
+     *
+     * data/ is excluded: it is not being touched, and it holds the uploads,
+     * which are the one thing on a loaner-pool server large enough to fill a
+     * shared hosting quota.
+     */
+    private static function backup(string $root, array &$log): string
+    {
+        $path = Config::dataDir() . '/backup-' . date('Y-m-d-His') . '.zip';
+
+        if (!class_exists('ZipArchive')) {
+            throw new \RuntimeException(
+                'The zip extension is not available, so no backup can be made. Re-run with '
+                . '--no-backup only if you have backed the files up yourself.',
+            );
+        }
+
+        $zip = new \ZipArchive();
+
+        if ($zip->open($path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
+            throw new \RuntimeException("Could not create a backup at {$path}.");
+        }
+
+        $count = 0;
+
+        foreach (self::walk($root) as $absolute) {
+            $relative = ltrim(substr($absolute, strlen($root)), '/');
+            $zip->addFile($absolute, $relative);
+            $count++;
+        }
+
+        $zip->close();
+        @chmod($path, 0600);
+
+        $log[] = "Backed up {$count} file(s).";
+
+        return $path;
+    }
+
+    /**
+     * Copy the new tree over the old one.
+     *
+     * Only files present in the release are written. Files that exist on the
+     * server but not upstream are left alone: an orphan from an older version
+     * is inert, because nothing references it, whereas deleting by rule would
+     * eventually delete something an administrator put there on purpose.
+     */
+    private static function replaceFiles(string $source, string $root): int
+    {
+        $written = 0;
+
+        foreach (self::walk($source) as $absolute) {
+            $relative    = ltrim(substr($absolute, strlen($source)), '/');
+            $destination = $root . '/' . $relative;
+
+            // Never overwrite the data directory, whatever an archive claims.
+            if ($relative === 'data' || str_starts_with($relative, 'data/')) {
+                continue;
+            }
+
+            $directory = dirname($destination);
+
+            if (!is_dir($directory) && !@mkdir($directory, 0755, true) && !is_dir($directory)) {
+                throw new \RuntimeException("Could not create {$directory}.");
+            }
+
+            if (!@copy($absolute, $destination)) {
+                throw new \RuntimeException(
+                    "Could not write {$destination}. The update is incomplete — restore from the "
+                    . 'backup noted above.',
+                );
+            }
+
+            $written++;
+        }
+
+        return $written;
+    }
+
+    /**
+     * Every file under a directory, skipping data/ and .git/.
+     *
+     * @return \Generator<string>
+     */
+    private static function walk(string $root): \Generator
+    {
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveCallbackFilterIterator(
+                new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
+                static function (\SplFileInfo $file): bool {
+                    $name = $file->getFilename();
+
+                    // data/ holds the credentials and uploads; .git/ is huge
+                    // and meaningless in a backup of the deployed files.
+                    return !($file->isDir() && in_array($name, ['data', '.git'], true));
+                },
+            ),
+            \RecursiveIteratorIterator::LEAVES_ONLY,
+        );
+
+        foreach ($iterator as $file) {
+            if ($file->isFile()) {
+                yield $file->getPathname();
+            }
+        }
+    }
+
+    private static function removeTree(string $path): void
+    {
+        if (!is_dir($path)) {
+            return;
+        }
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($path, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST,
+        );
+
+        foreach ($iterator as $file) {
+            $file->isDir() ? @rmdir($file->getPathname()) : @unlink($file->getPathname());
+        }
+
+        @rmdir($path);
+    }
+
     // -----------------------------------------------------------------------
     // Plumbing
     // -----------------------------------------------------------------------
 
     /** @return array{0:int, 1:string} status, body */
-    private static function httpGet(string $url): array
+    private static function httpGet(string $url, ?int $timeout = null): array
     {
         if (!function_exists('curl_init')) {
             throw new \RuntimeException('The curl extension is not available on this server.');
@@ -425,9 +752,12 @@ final class Updates
 
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => self::TIMEOUT_SECONDS,
+            CURLOPT_TIMEOUT        => $timeout ?? self::TIMEOUT_SECONDS,
             CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_FOLLOWLOCATION => false,
+            // codeload redirects; the version check does not, but following
+            // is safe here because the URL is pinned to a commit SHA.
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
             CURLOPT_HTTPHEADER     => [
                 'Accept: application/vnd.github+json',
                 // GitHub requires a User-Agent and rejects requests without

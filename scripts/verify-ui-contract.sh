@@ -59,23 +59,42 @@ print("" if data is None else data)
 ' "$1" 2>/dev/null
 }
 
-# contract <label> <json> <field> [field...]
-# Asserts each field is PRESENT as a top-level key. Present-and-null passes:
-# null is a value the views handle; a missing key is what breaks them.
+# contract <label> <json> <path> [path...]
+# Asserts each path is PRESENT. A path may be nested with dots —
+# "devices.utilisation_percent" — because that is where this check was weakest:
+# the end-to-end suite greps the response body for a field name, which passes
+# whenever the name appears ANYWHERE. A summary that returned
+# utilisation_percent at the top level while the dashboard read it from
+# devices.* satisfied the grep and rendered "undefined%" on the first screen a
+# user sees. Paths are compared where the view actually looks.
+#
+# Present-and-null passes: null is a value the views handle, a missing key is
+# what breaks them.
 contract() {
   local label="$1" json="$2"; shift 2
   local missing
   missing=$(printf '%s' "$json" | python3 -c '
 import sys, json
+
 try:
     data = json.load(sys.stdin)
 except Exception:
-    print("response was not JSON: " + sys.stdin.read()[:120] if False else "RESPONSE_NOT_JSON")
+    print("RESPONSE_NOT_JSON")
     sys.exit(0)
+
 if not isinstance(data, dict):
     print("RESPONSE_NOT_OBJECT")
     sys.exit(0)
-print(" ".join(f for f in sys.argv[1:] if f not in data))
+
+def present(root, path):
+    node = root
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return False
+        node = node[part]
+    return True
+
+print(" ".join(p for p in sys.argv[1:] if not present(data, p)))
 ' "$@")
 
   if [ -z "$missing" ]; then
@@ -96,6 +115,15 @@ api POST /api/v1/auth/login '{"email":"admin@example.org","password":"correct-ho
 contract "auth/me -> app.js" \
   "$(api GET /api/v1/auth/me)" user organization capabilities must_change_password
 
+# --- dashboard.js: the first screen anyone sees ---------------------------
+# Every one of these is dereferenced to build a counter tile, so a missing one
+# renders the word "undefined" to the user rather than failing loudly.
+contract "reports/summary -> dashboard.js" "$(api GET /api/v1/reports/summary)" \
+  devices.total devices.available devices.checked_out devices.maintenance \
+  devices.utilisation_percent \
+  loans.overdue loans.due_within_7_days \
+  requests.awaiting_review requests.provisioning requests.ready_pickup
+
 # --- admin.js: settings and email ------------------------------------------
 contract "GET admin/settings -> admin.js" \
   "$(api GET /api/v1/admin/settings)" settings mail_status
@@ -104,15 +132,8 @@ contract "GET admin/settings -> admin.js" \
 # (evaluating 'status.usable')": the view re-renders the email status box from
 # the save response the moment it returns.
 SAVED=$(api PATCH /api/v1/admin/settings '{"settings":{"notify.due_soon_days":3}}')
-contract "PATCH admin/settings -> admin.js" "$SAVED" settings mail_status
-printf '%s' "$SAVED" | python3 -c '
-import sys, json
-d = json.load(sys.stdin)
-s = d.get("mail_status") or {}
-missing = [f for f in ("usable", "sender", "reason") if f not in s]
-sys.exit("mail_status is missing: " + " ".join(missing) if missing else 0)
-' && pass "mail_status carries usable/sender/reason" \
-  || fail "mail_status carries usable/sender/reason"
+contract "PATCH admin/settings -> admin.js" "$SAVED" \
+  settings mail_status mail_status.usable mail_status.sender mail_status.reason
 
 contract "admin/organization -> admin.js" \
   "$(api GET /api/v1/admin/organization)" organization
@@ -133,20 +154,24 @@ contract "DELETE admin/loan-periods -> admin.js" \
 
 contract "jobs/run -> admin.js" "$(api POST /api/v1/jobs/run)" summary organizations
 
+# The scheduler panel leads with "when did this last work?", and renders the
+# run log as a table. A missing runs array threw before this check existed.
+contract "GET jobs -> admin.js schedulerSection()" "$(api GET /api/v1/jobs)" \
+  healthy in_process_scheduler last_success runs
+contract "jobs/cron-command -> admin.js" \
+  "$(api GET /api/v1/jobs/cron-command)" crontab note token
+
+# The photos panel reports what the uploads are costing in disk.
+contract "attachments/usage/summary -> admin.js" \
+  "$(api GET /api/v1/attachments/usage/summary)" files megabytes photos_enabled
+
 # The update panel renders from these. reachable may be false on a CI runner
 # with no outbound HTTPS, which is itself a case the panel has to handle, so
 # the contract is about the keys being present either way.
-contract "admin/updates -> admin.js" \
-  "$(api GET /api/v1/admin/updates)" local reachable up_to_date summary how_to_apply latest
-printf '%s' "$(api GET /api/v1/admin/updates)" | python3 -c '
-import sys, json
-d = json.load(sys.stdin)
-l = d.get("local") or {}
-missing = [f for f in ("app_version", "schema_version", "install_method",
-                       "commit_short", "branch", "has_local_changes") if f not in l]
-sys.exit("local is missing: " + " ".join(missing) if missing else 0)
-' && pass "updates.local carries what the panel renders" \
-  || fail "updates.local carries what the panel renders"
+contract "admin/updates -> admin.js" "$(api GET /api/v1/admin/updates)" \
+  local reachable up_to_date summary how_to_apply latest \
+  local.app_version local.schema_version local.install_method \
+  local.commit_short local.branch local.has_local_changes
 
 # --- loans.js: check-out and check-in -------------------------------------
 DEV=$(api GET '/api/v1/devices?search=iPad' | jqv "['data'][0]['id']")
