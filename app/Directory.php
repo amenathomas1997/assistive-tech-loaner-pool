@@ -116,15 +116,20 @@ final class Directory
         try {
             $id = Db::insert(
                 'INSERT INTO clients
-                   (organization_id, external_ref, first_name, last_name, email, phone,
-                    counselor_id, program_id, notes, active)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                   (organization_id, external_ref, case_number, first_name, last_name, email,
+                    phone, mobile, sms_opt_in, counselor_id, program_id, notes, active)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     $organizationId,
                     Util::str($input['external_ref'] ?? $input['externalRef'] ?? null, 64) ?: null,
+                    Util::str($input['case_number'] ?? $input['caseNumber'] ?? null, 64) ?: null,
                     $first, $last,
                     Util::email($input['email'] ?? null, 'email'),
                     Util::str($input['phone'] ?? null, 40),
+                    Util::str($input['mobile'] ?? null, 40),
+                    // Consent is explicit: holding a mobile number is not
+                    // permission to text it.
+                    Util::bool($input['sms_opt_in'] ?? $input['smsOptIn'] ?? false) ? 1 : 0,
                     $input['counselor_id'] ?? $input['counselorId'] ?? null,
                     $input['program_id'] ?? $input['programId'] ?? null,
                     Util::str($input['notes'] ?? null),
@@ -169,8 +174,11 @@ final class Directory
             'last_name'    => ['last_name', 120],
             'lastName'     => ['last_name', 120],
             'phone'        => ['phone', 40],
+            'mobile'       => ['mobile', 40],
             'external_ref' => ['external_ref', 64],
             'externalRef'  => ['external_ref', 64],
+            'case_number'  => ['case_number', 64],
+            'caseNumber'   => ['case_number', 64],
             'notes'        => ['notes', null],
         ];
 
@@ -197,6 +205,14 @@ final class Directory
         if (array_key_exists('active', $input)) {
             $sets[]   = 'active = ?';
             $params[] = Util::bool($input['active']) ? 1 : 0;
+        }
+
+        foreach (['sms_opt_in', 'smsOptIn'] as $key) {
+            if (array_key_exists($key, $input)) {
+                $sets[]   = 'sms_opt_in = ?';
+                $params[] = Util::bool($input[$key]) ? 1 : 0;
+                break;
+            }
         }
 
         if ($sets === []) {
@@ -230,8 +246,8 @@ final class Directory
             'entityLabel'    => $after['full_name'],
             'summary'        => "Client {$after['full_name']} updated",
             'detail'         => Audit::diff($before, $after, [
-                'first_name', 'last_name', 'email', 'phone', 'external_ref',
-                'counselor_id', 'program_id', 'active',
+                'first_name', 'last_name', 'email', 'phone', 'mobile', 'external_ref',
+                'case_number', 'sms_opt_in', 'counselor_id', 'program_id', 'active',
             ]),
         ]);
 

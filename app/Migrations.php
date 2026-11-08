@@ -19,7 +19,7 @@ namespace Loaner;
 final class Migrations
 {
     /** Highest version this build knows about. */
-    public const TARGET_VERSION = 4;
+    public const TARGET_VERSION = 5;
 
     // -----------------------------------------------------------------------
     // Idempotent DDL helpers
@@ -566,6 +566,18 @@ final class Migrations
                         CONSTRAINT fk_pending_user FOREIGN KEY (user_id)
                           REFERENCES users (id) ON DELETE CASCADE
                     ', $log);
+                },
+            ],
+            [
+                'version' => 5,
+                'name'    => 'Separate pending two-factor secret',
+                'up'      => static function (array &$log): void {
+                    // An enrolment in progress is kept apart from the secret
+                    // that is actually in use. Writing the new one straight
+                    // over the live one meant starting a set-up and walking
+                    // away silently removed a working second factor.
+                    self::addColumn('users', 'totp_pending_secret',
+                        'VARCHAR(255) DEFAULT NULL', $log);
                 },
             ],
         ];

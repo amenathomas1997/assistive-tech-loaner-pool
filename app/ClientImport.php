@@ -307,21 +307,21 @@ final class ClientImport
      */
     private static function findExisting(int $organizationId, array $client): ?array
     {
-        foreach (['external_ref', 'case_number'] as $key) {
-            if (empty($client[$key])) {
-                continue;
-            }
-
-            $found = Db::one(
-                "SELECT id FROM clients WHERE organization_id = ? AND {$key} = ?",
-                [$organizationId, $client[$key]],
-            );
-
-            if ($found !== null) {
-                return $found;
-            }
+        // external_ref only. It is unique per organisation, which is what
+        // makes it safe to match on.
+        //
+        // case_number is deliberately NOT used. It has no unique constraint
+        // and a vocational rehabilitation case can cover more than one
+        // participant, so matching on it merges two different people and one
+        // silently overwrites the other — the same failure this function's
+        // refusal to match on names exists to prevent.
+        if (empty($client['external_ref'])) {
+            return null;
         }
 
-        return null;
+        return Db::one(
+            'SELECT id FROM clients WHERE organization_id = ? AND external_ref = ?',
+            [$organizationId, $client['external_ref']],
+        );
     }
 }

@@ -186,8 +186,9 @@ final class Requests
                         'INSERT INTO loan_requests
                            (organization_id, reference, requested_by, client_id, program_id, device_id,
                             requested_category, requested_details, justification, needed_by,
-                            loan_period_id, requested_days, delivery_mode, status, fulfillment_state)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "pending")',
+                            loan_period_id, requested_days, delivery_mode, authorization_ref,
+                            status, fulfillment_state)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "pending")',
                         [
                             $organizationId, $reference, $requestedBy,
                             $input['clientId'] ?? null, $input['programId'] ?? null, $deviceId,
@@ -195,6 +196,7 @@ final class Requests
                             $input['justification'] ?? null, $input['neededBy'] ?? null,
                             $input['loanPeriodId'] ?? null, $input['requestedDays'] ?? null,
                             $input['deliveryMode'] ?? 'vrc_pickup',
+                            $input['authorizationRef'] ?? null,
                             !empty($input['autoApprove']) ? 'approved' : 'submitted',
                         ],
                     );
@@ -457,6 +459,10 @@ final class Requests
                 'notes'            => $input['notes'] ?? null,
                 'conditionOut'     => $input['conditionOut'] ?? null,
                 'method'           => $input['method'] ?? 'request',
+                // Carried through, so the loan is tied to the same
+                // authorisation the request was approved under.
+                'authorizationRef' => $input['authorizationRef']
+                    ?? $request['authorization_ref'] ?? null,
                 'requestId'        => $request['id'],
                 'actorId'          => $input['actorId'] ?? null,
             ]);

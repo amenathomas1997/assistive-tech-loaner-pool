@@ -250,19 +250,17 @@ final class Totp
     {
         $hash = Util::sha256(self::normaliseRecovery($code));
 
-        $row = Db::one(
-            'SELECT id FROM totp_recovery_codes
+        // One statement, and the answer is how many rows it changed. A SELECT
+        // followed by an UPDATE lets two simultaneous attempts with the same
+        // code both see it unused, turning one single-use code into two
+        // signed-in sessions.
+        $claimed = Db::execute(
+            'UPDATE totp_recovery_codes SET used_at = NOW()
               WHERE user_id = ? AND code_hash = ? AND used_at IS NULL',
             [$userId, $hash],
         );
 
-        if ($row === null) {
-            return false;
-        }
-
-        Db::execute('UPDATE totp_recovery_codes SET used_at = NOW() WHERE id = ?', [$row['id']]);
-
-        return true;
+        return $claimed === 1;
     }
 
     public static function remainingRecoveryCodes(int $userId): int

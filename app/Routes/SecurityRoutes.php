@@ -88,10 +88,24 @@ final class SecurityRoutes
     {
         $auth = self::requireOwnAccount($request);
 
+        // Re-enrolling replaces a working second factor, which is the same
+        // weakening disable() asks for a password before doing. Without this,
+        // begin() was a password-free way to strip two-factor from an account
+        // using nothing but a stolen session.
+        $current = Db::one('SELECT totp_enabled FROM users WHERE id = ?', [$auth['userId']]);
+
+        if (!empty($current['totp_enabled'])) {
+            self::confirmPassword($auth, $request->input('password'));
+        }
+
         $secret = Totp::generateSecret();
 
+        // The pending secret is kept apart from the live one, so an enrolment
+        // that is started and then abandoned leaves a working account exactly
+        // as it was. Writing over totp_secret here meant a half-finished
+        // set-up silently removed the protection it was meant to renew.
         Db::execute(
-            'UPDATE users SET totp_secret = ?, totp_enabled = 0, totp_confirmed_at = NULL WHERE id = ?',
+            'UPDATE users SET totp_pending_secret = ? WHERE id = ?',
             [Secrets::encrypt($secret), $auth['userId']],
         );
 
@@ -134,8 +148,8 @@ final class SecurityRoutes
 
         $code = (string) ($request->input('code') ?? '');
 
-        $user = Db::one('SELECT totp_secret FROM users WHERE id = ?', [$auth['userId']]);
-        $secret = Secrets::decrypt($user['totp_secret'] ?? null);
+        $user   = Db::one('SELECT totp_pending_secret FROM users WHERE id = ?', [$auth['userId']]);
+        $secret = Secrets::decrypt($user['totp_pending_secret'] ?? null);
 
         if ($secret === null || $secret === '') {
             throw Util::badRequest('Start the set-up again — there is no pending secret for this account.');
@@ -149,8 +163,11 @@ final class SecurityRoutes
             );
         }
 
+        // Only now does the new secret become the live one.
         Db::execute(
-            'UPDATE users SET totp_enabled = 1, totp_confirmed_at = NOW() WHERE id = ?',
+            'UPDATE users SET totp_secret = totp_pending_secret, totp_pending_secret = NULL,
+                    totp_enabled = 1, totp_confirmed_at = NOW()
+              WHERE id = ?',
             [$auth['userId']],
         );
 
@@ -195,7 +212,8 @@ final class SecurityRoutes
 
         Db::transaction(static function () use ($auth): void {
             Db::execute(
-                'UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_confirmed_at = NULL
+                'UPDATE users SET totp_enabled = 0, totp_secret = NULL,
+                        totp_pending_secret = NULL, totp_confirmed_at = NULL
                   WHERE id = ?',
                 [$auth['userId']],
             );

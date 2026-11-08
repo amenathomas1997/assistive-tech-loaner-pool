@@ -143,6 +143,13 @@ final class LoanRoutes
             'accessoriesOut'   => $body['accessories'] ?? $body['accessories_out']
                 ?? $body['accessoriesOut'] ?? null,
             'requestId'        => $body['request_id'] ?? $body['requestId'] ?? null,
+            // The VR authorisation the equipment goes out against. Without it
+            // on the loan there is no way to tie what was lent back to the
+            // case that paid for it.
+            'authorizationRef' => Util::boundedStr(
+                $body['authorization_ref'] ?? $body['authorizationRef'] ?? null,
+                'authorization_ref', 64,
+            ),
             // The scan station sends scanned:true rather than restating the
             // method, so the two cannot disagree about how it was done.
             'method'           => Util::bool($body['scanned'] ?? false)

@@ -161,6 +161,10 @@ final class RequestRoutes
                 $body['delivery_mode'] ?? $body['deliveryMode'] ?? 'vrc_pickup',
                 Requests::DELIVERY_MODES, 'delivery_mode', true,
             ),
+            'authorizationRef'  => Util::boundedStr(
+                $body['authorization_ref'] ?? $body['authorizationRef'] ?? null,
+                'authorization_ref', 64,
+            ),
             'autoApprove'       => (bool) Settings::get($organizationId, 'loans.auto_approve_vrc'),
         ]);
 
@@ -261,6 +265,10 @@ final class RequestRoutes
             'customDays'       => $body['custom_days'] ?? $body['customDays'] ?? null,
             'conditionOut'     => Util::str($body['condition_out'] ?? $body['conditionOut'] ?? null, 190),
             'notes'            => Util::str($body['notes'] ?? null),
+            'authorizationRef' => Util::boundedStr(
+                $body['authorization_ref'] ?? $body['authorizationRef'] ?? null,
+                'authorization_ref', 64,
+            ),
             'method'           => 'request',
             'actorId'          => $auth['userId'] ?? null,
         ]);

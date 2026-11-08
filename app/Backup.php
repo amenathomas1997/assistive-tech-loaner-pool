@@ -46,12 +46,6 @@ final class Backup
             date('Y-m-d-His'),
         );
 
-        Audit::record($auth, [
-            'action'     => Audit::BACKUP_DOWNLOADED,
-            'entityType' => 'backup',
-            'summary'    => ($auth['fullName'] ?? 'An administrator') . ' downloaded a database backup',
-        ]);
-
         // No Content-Length: the body is generated as it goes, and guessing
         // would truncate it.
         header('Content-Type: application/sql; charset=utf-8');
@@ -74,7 +68,21 @@ final class Backup
         }
 
         self::write("\nSET FOREIGN_KEY_CHECKS = 1;\n");
-        self::write("-- Backup complete.\n");
+        // This line is the only way to tell a complete backup from one that
+        // died half way: there is no Content-Length to check against, so a
+        // truncated dump looks like a perfectly good file.
+        self::write("-- Backup complete. If this line is missing, the file is truncated.\n");
+
+        // Audited only once the whole file has gone out. Recording it up
+        // front meant a dump that timed out mid-table still left an entry
+        // saying a backup had been taken — read later by whoever is
+        // deciding whether a restore is possible.
+        Audit::record($auth, [
+            'action'     => Audit::BACKUP_DOWNLOADED,
+            'entityType' => 'backup',
+            'summary'    => ($auth['fullName'] ?? 'An administrator')
+                          . ' downloaded a database backup',
+        ]);
 
         exit;
     }
@@ -131,6 +139,9 @@ final class Backup
             . '-- Taken:        ' . date('c') . "\n"
             . '-- Application:  ' . APP_VERSION . ' (schema ' . Migrations::currentVersion() . ")\n"
             . '-- Server:       ' . $version . "\n"
+            . "--\n"
+            . "-- Check the last line reads 'Backup complete' before relying on this\n"
+            . "-- file. A dump cut short by a timeout otherwise looks identical.\n"
             . "--\n"
             . "-- Restore with:\n"
             . "--   mysql -u USER -p DATABASE < this-file.sql\n"
