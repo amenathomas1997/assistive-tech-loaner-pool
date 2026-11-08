@@ -487,7 +487,69 @@ final class Repairs
             $params,
         );
 
+        // Devices that have been in more than once. The question behind the
+        // report is "repair it again, or replace it?", and a device on its
+        // third visit is usually answering that question itself.
+        $repeatOffenders = [];
+        foreach ($byDevice as $row) {
+            if ((int) $row['repair_count'] < 2) {
+                continue;
+            }
+            $repeatOffenders[] = [
+                'id'           => (int) $row['device_id'],
+                'name'         => $row['device_name'],
+                'barcode'      => $row['barcode'],
+                'category'     => $row['category'],
+                'repair_count' => (int) $row['repair_count'],
+                'total_cost'   => round((float) $row['total_cost'], 2),
+            ];
+        }
+
+        // Who the work goes to, what it costs, and how long they keep it.
+        // Turnaround is measured from sending to getting it back, not to the
+        // ticket being closed, so paperwork does not count against a vendor.
+        $byVendor = Db::all(
+            "SELECT COALESCE(NULLIF(r.vendor, ''), 'In house') AS vendor,
+                    COUNT(*) AS tickets,
+                    COALESCE(SUM(r.cost), 0) AS cost,
+                    AVG(CASE WHEN r.sent_at IS NOT NULL AND r.returned_at IS NOT NULL
+                             THEN TIMESTAMPDIFF(DAY, r.sent_at, r.returned_at) END) AS avg_days
+               FROM repairs r WHERE {$whereSql}
+              GROUP BY COALESCE(NULLIF(r.vendor, ''), 'In house')
+              ORDER BY cost DESC, tickets DESC",
+            $params,
+        );
+
+        foreach ($byVendor as &$vendor) {
+            $vendor['tickets']  = (int) $vendor['tickets'];
+            $vendor['cost']     = round((float) $vendor['cost'], 2);
+            // Zero, not null: this reads into "N days" on screen, and a
+            // vendor nothing has been sent to yet has no turnaround at all.
+            $vendor['avg_days'] = $vendor['avg_days'] === null
+                ? 0 : round((float) $vendor['avg_days'], 1);
+        }
+        unset($vendor);
+
+        $totalCost    = round((float) $totals['total_cost'], 2);
+        $warrantyCost = round((float) $totals['warranty_cost'], 2);
+
         return [
+            // Flattened alongside the grouped version. The reports screen
+            // reads these names; the repairs screen reads totals. Both are
+            // the same numbers, computed once.
+            'open'          => (int) $totals['open_count'],
+            'repaired'      => (int) $totals['repaired_count'],
+            'unrepairable'  => (int) $totals['written_off_count'],
+            'total_cost'    => $totalCost,
+            'warranty_cost' => $warrantyCost,
+            // What the organisation actually paid, as opposed to what was
+            // covered. This is the figure a budget conversation needs.
+            'out_of_warranty_cost' => round($totalCost - $warrantyCost, 2),
+            'avg_days_to_close' => $totals['avg_days_to_close'] === null
+                ? 0 : round((float) $totals['avg_days_to_close'], 1),
+            'repeat_offenders'  => $repeatOffenders,
+            'by_vendor'         => $byVendor,
+
             'totals' => [
                 'repair_count'      => (int) $totals['repair_count'],
                 'open_count'        => (int) $totals['open_count'],

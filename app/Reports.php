@@ -39,7 +39,8 @@ final class Reports
         // card says "Due within 7 days" and a card whose label and number
         // disagree is worse than no card.
         $loans = Db::one(
-            'SELECT SUM(status = "active") AS active,
+            'SELECT COUNT(*) AS total,
+                    SUM(status = "active") AS active,
                     SUM(status = "active" AND due_at IS NOT NULL AND due_at < NOW()) AS overdue,
                     SUM(status = "active" AND due_at IS NOT NULL
                         AND due_at >= NOW() AND due_at <= DATE_ADD(NOW(), INTERVAL ? DAY)) AS due_soon,
@@ -103,6 +104,25 @@ final class Reports
     {
         [$fromSql, $toSql] = self::range($from, $to);
 
+        // One request, every card on the Reports screen. The alternative was
+        // nine round trips from a page that is already the slowest in the
+        // application, each one able to fail on its own and leave half a
+        // report on screen.
+        $composed = [
+            'summary'    => self::summary($organizationId),
+            'trend'      => self::trend($organizationId)['rows'],
+            'categories' => self::categoryDemand($organizationId, $from, $to)['rows'],
+            'activity'   => [
+                'clients'  => self::holderActivity($organizationId, 'client', $from, $to)['rows'],
+                'programs' => self::holderActivity($organizationId, 'program', $from, $to)['rows'],
+                'techs'    => self::holderActivity($organizationId, 'tech', $from, $to)['rows'],
+            ],
+            'idle_devices'  => self::idleDevices($organizationId)['rows'],
+            'scan_adoption' => self::scanAdoption($organizationId, $from, $to),
+            'return_performance'  => self::returnPerformance($organizationId, $fromSql, $toSql),
+            'request_performance' => self::requestPerformance($organizationId, $fromSql, $toSql),
+        ];
+
         $loanWhere  = 'l.organization_id = ? AND l.checked_out_at >= ? AND l.checked_out_at <= ?';
         $loanParams = [$organizationId, $fromSql, $toSql];
 
@@ -151,7 +171,7 @@ final class Reports
             $loanParams,
         );
 
-        return [
+        return $composed + [
             'range'  => ['from' => $fromSql, 'to' => $toSql],
             'totals' => [
                 'loans_issued'     => (int) $totals['loans_issued'],
@@ -176,6 +196,93 @@ final class Reports
                 'overdue'  => count(Loans::overdue($organizationId)),
                 'due_soon' => count(Loans::dueSoon($organizationId)),
             ],
+        ];
+    }
+
+    /**
+     * Were things brought back, and were they brought back on time?
+     *
+     * Counted on loans that have actually ended. A loan still out cannot be
+     * late in this sense — it may be overdue, which the dashboard shows, but
+     * it has no return to judge — and including it would make the on-time
+     * rate drift as the month went on rather than describe what happened.
+     */
+    private static function returnPerformance(int $organizationId, string $from, string $to): array
+    {
+        $row = Db::one(
+            "SELECT COUNT(*) AS completed_loans,
+                    SUM(due_at IS NULL OR returned_at <= due_at) AS on_time,
+                    SUM(due_at IS NOT NULL AND returned_at > due_at) AS late,
+                    AVG(TIMESTAMPDIFF(DAY, checked_out_at, returned_at)) AS avg_loan_days,
+                    AVG(CASE WHEN due_at IS NOT NULL AND returned_at > due_at
+                             THEN TIMESTAMPDIFF(DAY, due_at, returned_at) END) AS avg_days_late,
+                    MAX(CASE WHEN due_at IS NOT NULL AND returned_at > due_at
+                             THEN TIMESTAMPDIFF(DAY, due_at, returned_at) END) AS max_days_late
+               FROM loans
+              WHERE organization_id = ? AND status = 'returned'
+                AND returned_at >= ? AND returned_at <= ?",
+            [$organizationId, $from, $to],
+        );
+
+        $completed = (int) $row['completed_loans'];
+        $onTime    = (int) $row['on_time'];
+
+        return [
+            'completed_loans' => $completed,
+            'on_time'         => $onTime,
+            'late'            => (int) $row['late'],
+            // Null rather than 100 when nothing has come back: a pool with no
+            // returns yet has not got a perfect record, it has no record.
+            'on_time_rate_percent' => $completed === 0 ? null : round($onTime / $completed * 100, 1),
+            'avg_loan_days'  => $row['avg_loan_days'] === null
+                ? 0 : round((float) $row['avg_loan_days'], 1),
+            'avg_days_late'  => $row['avg_days_late'] === null
+                ? 0 : round((float) $row['avg_days_late'], 1),
+            'max_days_late'  => (int) ($row['max_days_late'] ?? 0),
+        ];
+    }
+
+    /**
+     * How long a VRC waits between asking and getting.
+     *
+     * Time to review is measured from submission to the decision. Time to
+     * deliver is measured to the moment the equipment actually went out —
+     * the linked loan's check-out — rather than to the row being marked
+     * fulfilled, because the two can be days apart and only the first is the
+     * figure the counselor experienced.
+     */
+    private static function requestPerformance(int $organizationId, string $from, string $to): array
+    {
+        $row = Db::one(
+            "SELECT COUNT(*) AS total,
+                    SUM(r.status = 'approved')  AS approved,
+                    SUM(r.status = 'denied')    AS denied,
+                    SUM(r.status = 'fulfilled') AS fulfilled,
+                    SUM(r.status = 'cancelled') AS cancelled,
+                    SUM(r.status = 'submitted') AS awaiting_review,
+                    AVG(CASE WHEN r.reviewed_at IS NOT NULL
+                             THEN TIMESTAMPDIFF(HOUR, r.created_at, r.reviewed_at) END)
+                        AS avg_hours_to_review,
+                    AVG(CASE WHEN l.checked_out_at IS NOT NULL
+                             THEN TIMESTAMPDIFF(HOUR, r.created_at, l.checked_out_at) END)
+                        AS avg_hours_to_fulfil
+               FROM loan_requests r
+               LEFT JOIN loans l ON l.id = r.loan_id
+              WHERE r.organization_id = ? AND r.created_at >= ? AND r.created_at <= ?",
+            [$organizationId, $from, $to],
+        );
+
+        return [
+            'total'           => (int) $row['total'],
+            'approved'        => (int) $row['approved'],
+            'denied'          => (int) $row['denied'],
+            'fulfilled'       => (int) $row['fulfilled'],
+            'cancelled'       => (int) $row['cancelled'],
+            'awaiting_review' => (int) $row['awaiting_review'],
+            'avg_hours_to_review' => $row['avg_hours_to_review'] === null
+                ? 0 : round((float) $row['avg_hours_to_review'], 1),
+            'avg_hours_to_fulfil' => $row['avg_hours_to_fulfil'] === null
+                ? 0 : round((float) $row['avg_hours_to_fulfil'], 1),
         ];
     }
 
@@ -237,7 +344,10 @@ final class Reports
         [$fromSql, $toSql] = self::range($from, $to);
 
         $lent = Db::all(
-            'SELECT COALESCE(d.category, "Uncategorised") AS category, COUNT(*) AS loan_count
+            'SELECT COALESCE(d.category, "Uncategorised") AS category, COUNT(*) AS loan_count,
+                    AVG(CASE WHEN l.returned_at IS NOT NULL
+                             THEN TIMESTAMPDIFF(DAY, l.checked_out_at, l.returned_at) END)
+                        AS avg_loan_days
                FROM loans l JOIN devices d ON d.id = l.device_id
               WHERE l.organization_id = ? AND l.checked_out_at >= ? AND l.checked_out_at <= ?
               GROUP BY COALESCE(d.category, "Uncategorised")',
@@ -263,8 +373,13 @@ final class Reports
             [$organizationId, $fromSql, $toSql],
         );
 
+        // Stock, and how much of it is free this minute. "Twelve loans against
+        // three units" means one thing when two are on the shelf and quite
+        // another when none are, and that is the number somebody deciding a
+        // purchase actually wants.
         $stock = Db::all(
-            'SELECT COALESCE(category, "Uncategorised") AS category, COUNT(*) AS device_count
+            'SELECT COALESCE(category, "Uncategorised") AS category, COUNT(*) AS device_count,
+                    SUM(status = "available") AS currently_available
                FROM devices WHERE organization_id = ? AND status <> "retired"
               GROUP BY COALESCE(category, "Uncategorised")',
             [$organizationId],
@@ -276,6 +391,13 @@ final class Reports
             foreach ($set as $row) {
                 $merged[$row['category']][$field] = (int) $row[$field];
             }
+        }
+        foreach ($lent as $row) {
+            $merged[$row['category']]['avg_loan_days'] = $row['avg_loan_days'] === null
+                ? null : round((float) $row['avg_loan_days'], 1);
+        }
+        foreach ($stock as $row) {
+            $merged[$row['category']]['currently_available'] = (int) $row['currently_available'];
         }
         foreach ($requested as $row) {
             $merged[$row['category']]['request_count'] = (int) $row['request_count'];
@@ -294,6 +416,8 @@ final class Reports
                 'category'      => $category,
                 'device_count'  => $devices,
                 'loan_count'    => $loans,
+                'avg_loan_days' => $values['avg_loan_days'] ?? null,
+                'currently_available' => $values['currently_available'] ?? 0,
                 'request_count' => $values['request_count'] ?? 0,
                 'denied_count'  => $values['denied_count']  ?? 0,
                 'waiting_count' => $values['waiting_count'] ?? 0,
@@ -352,6 +476,9 @@ final class Reports
                     SUM(l.status = 'active' AND l.due_at IS NOT NULL AND l.due_at < NOW()) AS overdue_count,
                     SUM(l.status = 'returned' AND l.due_at IS NOT NULL AND l.returned_at > l.due_at)
                         AS late_count,
+                    AVG(CASE WHEN l.returned_at IS NOT NULL
+                             THEN TIMESTAMPDIFF(DAY, l.checked_out_at, l.returned_at) END)
+                        AS avg_loan_days,
                     MAX(l.checked_out_at) AS last_loan_at
                FROM loans l {$join}
               WHERE l.organization_id = ? AND l.checked_out_at >= ? AND l.checked_out_at <= ?
@@ -367,7 +494,16 @@ final class Reports
             $row['active_count']  = (int) $row['active_count'];
             $row['overdue_count'] = (int) $row['overdue_count'];
             $row['late_count']    = (int) $row['late_count'];
+            // Null where nothing has come back yet, rather than zero: "no
+            // average" and "returned the same day" are different answers.
+            $row['avg_loan_days'] = $row['avg_loan_days'] === null
+                ? null : round((float) $row['avg_loan_days'], 1);
+            // The screens that list these call the column "name"; the reports
+            // API calls it holder_name. Both are present so neither has to
+            // know about the other.
+            $row['name'] = $row['holder_name'];
         }
+        unset($row);
 
         return ['holder' => $holder, 'rows' => $rows, 'range' => ['from' => $fromSql, 'to' => $toSql]];
     }
@@ -386,8 +522,12 @@ final class Reports
             [$organizationId, $months - 1],
         );
 
+        // Counted in the month the loan came back, with the late ones counted
+        // alongside. A rising return count tells you volume; the late share in
+        // the same month tells you whether the pool is keeping up with it.
         $returned = Db::all(
-            'SELECT DATE_FORMAT(returned_at, "%Y-%m") AS period, COUNT(*) AS loan_count
+            'SELECT DATE_FORMAT(returned_at, "%Y-%m") AS period, COUNT(*) AS loan_count,
+                    SUM(due_at IS NOT NULL AND returned_at > due_at) AS late_count
                FROM loans
               WHERE organization_id = ? AND returned_at IS NOT NULL
                 AND returned_at >= DATE_SUB(DATE_FORMAT(NOW(), "%Y-%m-01"), INTERVAL ? MONTH)
@@ -397,6 +537,7 @@ final class Reports
 
         $issuedBy   = array_column($issued, 'loan_count', 'period');
         $returnedBy = array_column($returned, 'loan_count', 'period');
+        $lateBy     = array_column($returned, 'late_count', 'period');
 
         // Build every month in the window, so a quiet month shows as zero
         // rather than vanishing and distorting the shape of the line.
@@ -405,12 +546,23 @@ final class Reports
         $cursor = $cursor->modify('-' . ($months - 1) . ' months');
 
         for ($i = 0; $i < $months; $i++) {
-            $period = $cursor->format('Y-m');
+            $period   = $cursor->format('Y-m');
+            $backIn   = (int) ($returnedBy[$period] ?? 0);
+            $wereLate = (int) ($lateBy[$period] ?? 0);
+
             $rows[] = [
                 'period'   => $period,
                 'label'    => $cursor->format('M Y'),
                 'checked_out' => (int) ($issuedBy[$period] ?? 0),
-                'checked_in'  => (int) ($returnedBy[$period] ?? 0),
+                // checked_in and returned are the same figure under two names:
+                // the check-in screens say "checked in", the reports say
+                // "returned", and neither should have to translate.
+                'checked_in'  => $backIn,
+                'returned'    => $backIn,
+                'returned_late'     => $wereLate,
+                // Null, not zero, in a month with no returns at all — there is
+                // no rate to report, and 0% would read as a perfect month.
+                'late_rate_percent' => $backIn === 0 ? null : round($wereLate / $backIn * 100, 1),
             ];
             $cursor = $cursor->modify('+1 month');
         }
@@ -538,6 +690,11 @@ final class Reports
                 'repair_count'    => (int) ($repairRow['repair_count'] ?? 0),
                 'repair_cost'     => round((float) ($repairRow['repair_cost'] ?? 0), 2),
                 'cost_per_loan'   => $loanCount === 0 ? null : round($cost / $loanCount, 2),
+                // Cost per person reached, which is the figure a grant report
+                // asks for rather than cost per loan: one person borrowing a
+                // device four times is one person served, not four.
+                'cost_per_client' => ($loanRow['clients_served'] ?? 0) == 0
+                    ? null : round($cost / (int) $loanRow['clients_served'], 2),
                 'loans_per_device' => $deviceCount === 0 ? null : round($loanCount / $deviceCount, 2),
                 'idle_devices'    => max(0, $deviceCount - (int) ($loanRow['devices_lent'] ?? 0)),
             ];
@@ -547,6 +704,11 @@ final class Reports
 
         return [
             'rows'       => $rows,
+            // The same list under the name the Reports screen uses. Two names
+            // for one array is not elegant; silently returning a shape the
+            // only consumer cannot read is worse, and that is what happened
+            // here until the screen was opened in a browser.
+            'by_funding_source' => $rows,
             'by_program' => self::fundingByProgram($organizationId, $fromSql, $toSql),
             'range'      => ['from' => $fromSql, 'to' => $toSql],
             'totals' => [
@@ -581,7 +743,11 @@ final class Reports
         $loans = Db::all(
             'SELECT COALESCE(p.name, "No program") AS program,
                     COUNT(l.id) AS loan_count,
-                    COUNT(DISTINCT l.client_id) AS clients_served
+                    COUNT(DISTINCT l.client_id) AS clients_served,
+                    COUNT(DISTINCT l.device_id) AS devices_used,
+                    AVG(CASE WHEN l.returned_at IS NOT NULL
+                             THEN TIMESTAMPDIFF(DAY, l.checked_out_at, l.returned_at) END)
+                        AS avg_loan_days
                FROM loans l
                LEFT JOIN programs p ON p.id = l.program_id
               WHERE l.organization_id = ? AND l.checked_out_at >= ? AND l.checked_out_at <= ?
@@ -602,6 +768,11 @@ final class Reports
                 'total_cost'     => round((float) $row['total_cost'], 2),
                 'loan_count'     => (int) ($loanRow['loan_count'] ?? 0),
                 'clients_served' => (int) ($loanRow['clients_served'] ?? 0),
+                // How many distinct units the program actually put to work,
+                // which is not the same as how many it owns.
+                'devices_used'   => (int) ($loanRow['devices_used'] ?? 0),
+                'avg_loan_days'  => ($loanRow['avg_loan_days'] ?? null) === null
+                    ? null : round((float) $loanRow['avg_loan_days'], 1),
             ];
         }
 

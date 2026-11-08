@@ -87,11 +87,20 @@ if not isinstance(data, dict):
     sys.exit(0)
 
 def present(root, path):
+    """Walk a dotted path. A numeric part indexes into a list, so a row shape
+    can be checked as rows.0.period rather than only at the top level — which
+    is how the whole Reports screen shipped broken: /reports returned the key
+    the check looked for and nothing inside it was what the view read."""
     node = root
     for part in path.split("."):
-        if not isinstance(node, dict) or part not in node:
+        if isinstance(node, list):
+            if not part.isdigit() or int(part) >= len(node):
+                return False
+            node = node[int(part)]
+        elif isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
             return False
-        node = node[part]
     return True
 
 print(" ".join(p for p in sys.argv[1:] if not present(data, p)))
@@ -123,6 +132,54 @@ contract "reports/summary -> dashboard.js" "$(api GET /api/v1/reports/summary)" 
   devices.utilisation_percent \
   loans.overdue loans.due_within_7_days \
   requests.awaiting_review requests.provisioning requests.ready_pickup
+
+# --- insights.js: the Reports screen --------------------------------------
+# GET /reports had no check of any kind, and every card on the screen read a
+# field the endpoint did not return: the page showed nothing but "Could not
+# build reports" from the day it was written. Each path below is one the view
+# dereferences.
+REPORT=$(api GET /api/v1/reports)
+contract "reports -> insights.js headline tiles" "$REPORT" \
+  summary.devices.total summary.devices.available summary.devices.utilisation_percent \
+  summary.loans.total summary.loans.active \
+  return_performance.on_time_rate_percent return_performance.completed_loans \
+  return_performance.on_time return_performance.late return_performance.avg_loan_days \
+  return_performance.avg_days_late return_performance.max_days_late
+
+contract "reports -> insights.js request performance" "$REPORT" \
+  request_performance.total request_performance.approved request_performance.denied \
+  request_performance.fulfilled request_performance.awaiting_review \
+  request_performance.avg_hours_to_review request_performance.avg_hours_to_fulfil
+
+contract "reports -> insights.js cards" "$REPORT" \
+  trend categories activity.clients activity.programs activity.techs \
+  idle_devices scan_adoption
+
+# The row shapes each table renders, checked one level in.
+contract "reports/trend -> insights.js" "$(api GET /api/v1/reports/trend)" \
+  rows.0.period rows.0.checked_out rows.0.returned rows.0.returned_late rows.0.late_rate_percent
+
+contract "reports/categories -> insights.js" "$(api GET /api/v1/reports/categories)" \
+  rows.0.category rows.0.device_count rows.0.loan_count rows.0.turns_per_device \
+  rows.0.avg_loan_days rows.0.currently_available
+
+contract "reports/activity -> insights.js" "$(api GET /api/v1/reports/activity/client)" \
+  rows.0.name rows.0.loan_count rows.0.active_count rows.0.overdue_count \
+  rows.0.avg_loan_days rows.0.last_loan_at
+
+contract "reports/idle -> insights.js" "$(api GET /api/v1/reports/idle)" \
+  rows.0.id rows.0.name rows.0.barcode rows.0.lifetime_loans rows.0.never_loaned
+
+contract "reports/scan-adoption -> insights.js" "$(api GET /api/v1/reports/scan-adoption)" \
+  check_out.scanned check_out.manual check_out.request check_out.api check_out.scan_percent \
+  check_in.scanned check_in.manual check_in.api check_in.scan_percent
+
+contract "reports/funding -> insights.js" "$(api GET /api/v1/reports/funding)" \
+  by_funding_source by_program
+
+contract "repairs/summary -> insights.js" "$(api GET /api/v1/repairs/summary)" \
+  open repaired unrepairable total_cost avg_days_to_close out_of_warranty_cost \
+  repeat_offenders by_vendor
 
 # --- admin.js: settings and email ------------------------------------------
 contract "GET admin/settings -> admin.js" \

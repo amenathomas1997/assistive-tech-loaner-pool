@@ -40,13 +40,13 @@
   /* Palette: a calm slate-and-teal scheme. The deep blue reads as
      institutional without being cold, and the teal accent stays legible on
      both light and dark surfaces. */
-  --brand:         #125b7d;
+  --brand:         #115677;
   --brand-strong:  #0d4762;
-  --brand-bright:  #1a7fa8;
+  --brand-bright:  #145f7e;
   --brand-soft:    #e8f2f7;
   --brand-tint:    #f4f9fb;
 
-  --accent:        #0b7a6b;
+  --accent:        #085b50;
   --accent-soft:   #e6f4f1;
 
   --bg:            #f6f7f9;
@@ -56,28 +56,34 @@
   --surface-sunken:#eef1f4;
 
   --border:        #dde2e8;
-  --border-strong: #9aa4b1;
-  --border-focus:  #125b7d;
+  /* The visible edge of a text field. SC 1.4.11 Non-text Contrast wants 3:1
+     against what surrounds it, and this was 2.52 — a field whose boundary
+     cannot be made out is a field somebody does not know is there. */
+  --border-strong: #838f9f;
+  --border-focus:  #115677;
 
   --text:          #14181d;
-  --text-muted:    #56606d;
+  --text-muted:    #49515c;
   --text-inverse:  #ffffff;
 
-  /* Status colours: the text variants clear 4.5:1 on their own tinted
-     backgrounds and on --surface; the borders clear 3:1. */
-  --ok:            #15703c;
+  /* Status colours: the text variants clear 7:1 on their own tinted
+     backgrounds and on --surface — WCAG 2.2 SC 1.4.6 Contrast (Enhanced),
+     not merely the 4.5:1 of SC 1.4.3. The borders clear 3:1 (SC 1.4.11).
+     Measured, not estimated: scripts/verify-contrast.mjs fails the build if
+     any of these pairings drops below 7. */
+  --ok:            #115d32;
   --ok-bg:         #e7f4ec;
   --ok-border:     #34a05f;
-  --warn:          #7d5100;
+  --warn:          #734a00;
   --warn-bg:       #fdf4e3;
   --warn-border:   #c08a1e;
-  --danger:        #a81f18;
+  --danger:        #9a1c16;
   --danger-bg:     #fce9e8;
   --danger-border: #d6544c;
-  --info:          #125b7d;
+  --info:          #115677;
   --info-bg:       #e8f2f7;
   --info-border:   #4b91b3;
-  --neutral:       #4d5765;
+  --neutral:       #48515e;
   --neutral-bg:    #eef0f3;
 
   --radius-xs: 4px;
@@ -103,13 +109,13 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --brand:         #63aed1;
+    --brand:         #8bc3dd;
     --brand-strong:  #8ac6e2;
     --brand-bright:  #7dbcdd;
     --brand-soft:    #16323f;
     --brand-tint:    #12242c;
 
-    --accent:        #4fbfa9;
+    --accent:        #64c7b3;
     --accent-soft:   #10302b;
 
     --bg:            #101418;
@@ -119,11 +125,11 @@
     --surface-sunken:#0d1116;
 
     --border:        #313941;
-    --border-strong: #5b6673;
+    --border-strong: #64717f;
     --border-focus:  #7dbcdd;
 
     --text:          #e9ecef;
-    --text-muted:    #a3adb9;
+    --text-muted:    #a7b1bc;
     --text-inverse:  #101418;
 
     --ok:            #63d090;
@@ -135,10 +141,10 @@
     --danger:        #f4938c;
     --danger-bg:     #351917;
     --danger-border: #c25c55;
-    --info:          #63aed1;
+    --info:          #8bc3dd;
     --info-bg:       #16323f;
     --info-border:   #47819f;
-    --neutral:       #a3adb9;
+    --neutral:       #b0b9c3;
     --neutral-bg:    #262d35;
 
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -328,8 +334,8 @@ a, button, input, select, textarea, summary,
   align-items: center;
   justify-content: center;
   gap: 7px;
-  min-height: 40px;
-  min-width: 40px;
+  min-height: 44px;
+  min-width: 44px;
   padding: 6px 13px;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.3);
@@ -356,7 +362,9 @@ a, button, input, select, textarea, summary,
 .avatar {
   width: 32px; height: 32px; border-radius: 50%;
   display: grid; place-items: center;
-  background: rgba(255, 255, 255, 0.2);
+  /* Darkened rather than lightened. A white veil over the header put the
+     white initials at 4.61:1; sinking the chip instead takes them past 10. */
+  background: rgba(0, 0, 0, 0.25);
   border: 1px solid rgba(255, 255, 255, 0.32);
   font-size: 0.78rem; font-weight: 700; letter-spacing: 0.02em;
   flex: 0 0 auto;
@@ -521,9 +529,10 @@ a.stat:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md);
   align-items: center;
   justify-content: center;
   gap: 7px;
-  /* SC 2.5.8 Target Size (Minimum) is 24×24; primary actions get 44 so they
-     are comfortable on a phone at a returns desk. */
-  min-height: 42px;
+  /* SC 2.5.8 Target Size (Minimum) is 24×24. These are 44×44, which is what
+     SC 2.5.5 Target Size (Enhanced) asks for — and what a phone at a returns
+     desk needs anyway. It was 42 before, two pixels short for no reason. */
+  min-height: 44px;
   min-width: 44px;
   padding: 9px 17px;
   border: 1px solid var(--border-strong);
@@ -547,13 +556,16 @@ a.stat:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md);
 .btn:active:not(:disabled) { transform: translateY(0.5px); }
 .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 
+/* The gradient runs brand -> brand-strong rather than bright -> brand: the
+   bright end put white text at 4.52:1, which scrapes past SC 1.4.3 by two
+   hundredths and is nowhere near the 7:1 of SC 1.4.6. Both ends now clear 7. */
 .btn-primary {
-  background: linear-gradient(180deg, var(--brand-bright), var(--brand));
+  background: linear-gradient(180deg, var(--brand), var(--brand-strong));
   border-color: var(--brand-strong);
   color: #fff;
 }
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, var(--brand), var(--brand-strong));
+  background: var(--brand-strong);
   border-color: var(--brand-strong);
 }
 @media (prefers-color-scheme: dark) {
@@ -570,16 +582,19 @@ a.stat:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md);
 .btn-ghost { background: transparent; border-color: transparent; box-shadow: none; }
 .btn-ghost:hover:not(:disabled) { background: var(--surface-alt); border-color: var(--border); }
 
-/* Still ≥ 24×24 including padding, per SC 2.5.8. */
-.btn-sm { min-height: 32px; min-width: 32px; padding: 5px 11px; font-size: 0.865rem; }
+/* "Small" is about the text and the padding, not the target. The box stays
+   44×44 (SC 2.5.5) because these are the row actions — check out, check in —
+   and a technician hits them on a tablet one-handed while holding a device. */
+.btn-sm { min-height: 44px; min-width: 44px; padding: 5px 11px; font-size: 0.865rem; }
 .btn-lg { min-height: 54px; padding: 14px 30px; font-size: 1.05rem; border-radius: var(--radius); }
 .btn-block { width: 100%; }
 
 .btn-group { display: inline-flex; gap: 7px; flex-wrap: wrap; }
 
-/* Icon-only buttons must still meet the 24px minimum target. */
+/* Icon-only buttons are the easiest to make too small and the hardest to
+   hit: 44×44, per SC 2.5.5, not the 24 of SC 2.5.8. */
 .btn-icon {
-  min-width: 40px; min-height: 40px; padding: 8px;
+  min-width: 44px; min-height: 44px; padding: 8px;
   display: inline-grid; place-items: center;
 }
 
@@ -604,7 +619,9 @@ input[type="text"], input[type="email"], input[type="password"], input[type="num
 input[type="search"], input[type="date"], input[type="tel"], input[type="url"],
 select, textarea {
   width: 100%;
-  min-height: 42px;
+  /* 44, matching the buttons: a field is a target too, and one that is two
+     pixels short of the SC 2.5.5 figure is short for no reason at all. */
+  min-height: 44px;
   padding: 9px 11px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -657,6 +674,27 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
 .field-error::before { content: "⚠"; flex: 0 0 auto; }
 .field-help { color: var(--text-muted); font-size: 0.865rem; margin-top: 5px; }
 
+/* Row selection in a table.
+   The tick itself is 24px, which is SC 2.5.8 Target Size (Minimum); the label
+   around it is 44px, which is SC 2.5.5 Target Size (Enhanced). The negative
+   margin keeps the row the height it was, so buying the larger target costs
+   no vertical space in a dense table. */
+.row-select {
+  display: inline-grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  margin: -10px 0;
+  cursor: pointer;
+}
+.row-select input {
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--brand);
+}
+
 .checkbox, .radio {
   display: flex;
   align-items: flex-start;
@@ -664,12 +702,17 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
   font-weight: 500;
   margin-bottom: 10px;
   cursor: pointer;
-  /* Whole row is the target, comfortably over the 24px minimum. */
-  min-height: 32px;
-  padding: 4px 0;
+  /* The whole row is the target, and it is 44px — SC 2.5.5 Target Size
+     (Enhanced), not the 24px floor of SC 2.5.8. A settings screen is mostly
+     these, and a row that is merely large enough is the one somebody with a
+     tremor keeps missing. */
+  min-height: 44px;
+  padding: 9px 0;
 }
 .checkbox input, .radio input {
-  width: 20px; height: 20px; margin: 3px 0 0; flex: 0 0 auto; cursor: pointer;
+  /* 24px, which is the SC 2.5.8 minimum on its own even if the label around
+     it were ever missed. */
+  width: 24px; height: 24px; margin: 1px 0 0; flex: 0 0 auto; cursor: pointer;
   accent-color: var(--brand);
 }
 .checkbox span, .radio span { font-weight: 500; }
@@ -851,7 +894,8 @@ th[aria-sort="none"] button::after { content: "↕"; font-size: 0.68em; opacity:
 }
 .alert .alert-icon { flex: 0 0 auto; font-size: 1.05rem; line-height: 1.45; }
 .alert .alert-body { min-width: 0; }
-.alert h3 { margin: 0 0 5px; font-size: 0.97rem; }
+/* The heading level varies with where the alert sits, so match any of them. */
+.alert :is(h2, h3, h4) { margin: 0 0 5px; font-size: 0.97rem; }
 .alert p:last-child { margin-bottom: 0; }
 .alert-info    { background: var(--info-bg);   border-color: var(--info-border);   color: var(--text); }
 .alert-ok      { background: var(--ok-bg);     border-color: var(--ok-border);     color: var(--text); }
@@ -1037,7 +1081,8 @@ dialog.modal.modal-wide { max-width: min(960px, calc(100vw - 32px)); }
 /* --- Empty and loading states -------------------------------------------- */
 
 .empty-state { text-align: center; padding: 48px 22px; color: var(--text-muted); }
-.empty-state h3 { color: var(--text); }
+/* Level varies with where the block sits, so style by position, not by tag. */
+.empty-state :is(h2, h3, h4) { color: var(--text); font-size: 1.05rem; }
 .empty-state .empty-icon { font-size: 2.4rem; margin-bottom: 10px; opacity: 0.55; }
 .empty-state p { max-width: 46ch; margin-inline: auto; }
 

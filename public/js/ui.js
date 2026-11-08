@@ -451,10 +451,19 @@ export function dateCell(value, { withTime = false, relative = false } = {}) {
   ]);
 }
 
-export function emptyState({ icon = '📭', title, message, action = null }) {
+/**
+ * The "nothing here" block.
+ *
+ * `level` is the heading level, and it defaults to 2 because the usual place
+ * for this is directly under the page's h1. It used to be a hard-coded h3,
+ * which skipped a level on every list screen that was empty — and a screen
+ * reader user moving by heading lands on an h3 with no h2 above it and has to
+ * work out whether they missed something.
+ */
+export function emptyState({ icon = '📭', title, message, action = null, level = 2 }) {
   return el('div', { class: 'empty-state' }, [
     el('div', { class: 'empty-icon', 'aria-hidden': 'true', text: icon }),
-    el('h3', { text: title }),
+    el(`h${level}`, { text: title }),
     message ? el('p', { text: message }) : null,
     action,
   ]);
@@ -467,12 +476,13 @@ export function loadingBlock(message = 'Loading…') {
   ]);
 }
 
-export function alert(message, { type = 'info', title = null } = {}) {
+/** `level` as in emptyState: 2 by default, so a titled alert never skips. */
+export function alert(message, { type = 'info', title = null, level = 2 } = {}) {
   const icons = { info: 'ℹ', ok: '✓', warn: '⚠', danger: '⚠' };
   return el('div', { class: `alert alert-${type}`, role: type === 'danger' ? 'alert' : null }, [
     el('span', { class: 'alert-icon', 'aria-hidden': 'true', text: icons[type] || 'ℹ' }),
     el('div', { class: 'alert-body' }, [
-      title ? el('h3', { text: title }) : null,
+      title ? el(`h${level}`, { text: title }) : null,
       el('p', { text: message }),
     ]),
   ]);

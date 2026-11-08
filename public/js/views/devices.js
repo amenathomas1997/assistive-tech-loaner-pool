@@ -159,19 +159,20 @@ function deviceColumns(reload, { selected = null, onSelectionChange = null } = {
     columns.push({
       key: 'select',
       label: 'Select',
-      render: (device) => el('input', {
+      // Wrapped in a label so the target is 44px even though the tick is 24.
+      // The label has no text of its own, so the checkbox keeps its own name.
+      render: (device) => el('label', { class: 'row-select' }, el('input', {
         type: 'checkbox',
         checked: selected.has(device.id),
         // The visible column header reads "Select", which is not enough on its
         // own when a screen reader reaches the twentieth checkbox in a table.
         'aria-label': `Select ${device.name}, barcode ${device.barcode}`,
-        style: { width: '20px', height: '20px' },
         onChange: (event) => {
           if (event.target.checked) selected.add(device.id);
           else selected.delete(device.id);
           onSelectionChange?.();
         },
-      }),
+      })),
     });
   }
 

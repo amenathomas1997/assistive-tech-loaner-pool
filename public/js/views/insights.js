@@ -259,7 +259,9 @@ function trendCard(trend) {
         { key: 'returned', label: 'Returned', align: 'right', render: (t) => String(t.returned) },
         {
           key: 'late', label: 'Returned late', align: 'right',
-          render: (t) => `${t.returned_late} (${t.late_rate_percent}%)`,
+          render: (t) => t.late_rate_percent === null
+            ? '—'
+            : `${t.returned_late} (${t.late_rate_percent}%)`,
         },
       ],
       rows: trend,
@@ -325,7 +327,10 @@ function fundingCard(funding) {
         },
         { key: 'loan_count', label: 'Loans', align: 'right', render: (r) => String(r.loan_count) },
         { key: 'clients_served', label: 'People reached', align: 'right', render: (r) => String(r.clients_served) },
-        { key: 'loans_per_device', label: 'Loans per device', align: 'right', render: (r) => String(r.loans_per_device) },
+        {
+          key: 'loans_per_device', label: 'Loans per device', align: 'right',
+          render: (r) => r.loans_per_device === null ? '—' : String(r.loans_per_device),
+        },
         {
           key: 'cost_per_loan', label: 'Cost per loan', align: 'right',
           render: (r) => (r.cost_per_loan === null ? '—' : r.cost_per_loan.toFixed(2)),
@@ -351,7 +356,10 @@ function fundingCard(funding) {
         { key: 'loan_count', label: 'Loans', align: 'right', render: (r) => String(r.loan_count) },
         { key: 'clients_served', label: 'People reached', align: 'right', render: (r) => String(r.clients_served) },
         { key: 'devices_used', label: 'Devices used', align: 'right', render: (r) => String(r.devices_used) },
-        { key: 'avg_loan_days', label: 'Average loan', align: 'right', render: (r) => `${r.avg_loan_days} days` },
+        {
+          key: 'avg_loan_days', label: 'Average loan', align: 'right',
+          render: (r) => r.avg_loan_days === null ? '—' : `${r.avg_loan_days} days`,
+        },
       ],
       rows: funding.by_program,
       emptyMessage: 'No program activity yet.',
@@ -431,8 +439,16 @@ function categoryCard(categories) {
         { key: 'category', label: 'Category' },
         { key: 'device_count', label: 'Units', align: 'right', render: (c) => String(c.device_count) },
         { key: 'loan_count', label: 'Loans', align: 'right', render: (c) => String(c.loan_count) },
-        { key: 'turns_per_device', label: 'Turns per device', align: 'right', render: (c) => String(c.turns_per_device) },
-        { key: 'avg_loan_days', label: 'Average loan', align: 'right', render: (c) => `${c.avg_loan_days} days` },
+        {
+          key: 'turns_per_device', label: 'Turns per device', align: 'right',
+          // Null where the category has no units left to divide by — a
+          // retired-only category. String(null) printed the word "null".
+          render: (c) => c.turns_per_device === null ? '—' : String(c.turns_per_device),
+        },
+        {
+          key: 'avg_loan_days', label: 'Average loan', align: 'right',
+          render: (c) => c.avg_loan_days === null ? '—' : `${c.avg_loan_days} days`,
+        },
         {
           key: 'availability', label: 'Available now', align: 'right',
           render: (c) => el('span', {}, [
@@ -464,7 +480,10 @@ function activityCard(title, rows) {
             ? el('span', { class: 'pill pill-danger' }, String(r.overdue_count))
             : '0',
         },
-        { key: 'avg_loan_days', label: 'Average loan', align: 'right', render: (r) => `${r.avg_loan_days} days` },
+        {
+          key: 'avg_loan_days', label: 'Average loan', align: 'right',
+          render: (r) => r.avg_loan_days === null ? '—' : `${r.avg_loan_days} days`,
+        },
         { key: 'last_loan_at', label: 'Last loan', align: 'right', render: (r) => dateCell(r.last_loan_at) },
       ],
       rows,
@@ -491,14 +510,14 @@ function idleCard(devices) {
         },
         { key: 'category', label: 'Category', render: (d) => d.category || '—' },
         { key: 'location', label: 'Location', render: (d) => d.location || '—' },
-        { key: 'loan_count', label: 'Loans ever', align: 'right', render: (d) => String(d.loan_count) },
+        { key: 'lifetime_loans', label: 'Loans ever', align: 'right', render: (d) => String(d.lifetime_loans) },
         {
           key: 'last', label: 'Last loaned', align: 'right',
           render: (d) => d.never_loaned
             ? el('span', { class: 'pill pill-warn' }, 'Never')
             : el('span', {}, [
-                dateCell(d.last_checked_out_at),
-                el('span', { class: 'cell-sub', text: `${d.days_since_last_loan} days ago` }),
+                dateCell(d.last_out_at),
+                el('span', { class: 'cell-sub', text: `${d.days_idle} days ago` }),
               ]),
         },
       ],
@@ -519,18 +538,20 @@ function scanAdoptionCard(adoption) {
       el('div', {}, [
         el('h3', { text: 'Check-outs' }),
         el('dl', { class: 'detail-list' }, [
-          el('dt', { text: 'By scan' }), el('dd', { text: `${adoption.checkout.scan} (${adoption.checkout.scan_percent}%)` }),
-          el('dt', { text: 'Manually' }), el('dd', { text: String(adoption.checkout.manual) }),
-          el('dt', { text: 'From a request' }), el('dd', { text: String(adoption.checkout.request) }),
-          el('dt', { text: 'Via the API' }), el('dd', { text: String(adoption.checkout.api) }),
+          el('dt', { text: 'By scan' }),
+          el('dd', { text: `${adoption.check_out.scanned} (${adoption.check_out.scan_percent}%)` }),
+          el('dt', { text: 'Manually' }), el('dd', { text: String(adoption.check_out.manual) }),
+          el('dt', { text: 'From a request' }), el('dd', { text: String(adoption.check_out.request) }),
+          el('dt', { text: 'Via the API' }), el('dd', { text: String(adoption.check_out.api) }),
         ]),
       ]),
       el('div', {}, [
         el('h3', { text: 'Check-ins' }),
         el('dl', { class: 'detail-list' }, [
-          el('dt', { text: 'By scan' }), el('dd', { text: `${adoption.checkin.scan} (${adoption.checkin.scan_percent}%)` }),
-          el('dt', { text: 'Manually' }), el('dd', { text: String(adoption.checkin.manual) }),
-          el('dt', { text: 'Via the API' }), el('dd', { text: String(adoption.checkin.api) }),
+          el('dt', { text: 'By scan' }),
+          el('dd', { text: `${adoption.check_in.scanned} (${adoption.check_in.scan_percent}%)` }),
+          el('dt', { text: 'Manually' }), el('dd', { text: String(adoption.check_in.manual) }),
+          el('dt', { text: 'Via the API' }), el('dd', { text: String(adoption.check_in.api) }),
         ]),
       ]),
     ]),

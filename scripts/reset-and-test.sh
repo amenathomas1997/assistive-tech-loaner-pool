@@ -118,10 +118,17 @@ echo "==> Checking the API/UI contract"
 ./scripts/verify-ui-contract.sh "http://localhost:$PORT"
 CONTRACT_RESULT=$?
 
+# Needs no server: it reads the stylesheet. Kept in this run anyway, because a
+# contrast regression is invisible to everything else here.
+echo "==> Checking colour contrast"
+node scripts/verify-contrast.mjs
+CONTRAST_RESULT=$?
+
 # Fail the run if either suite failed. Assigned explicitly rather than through
 # a short-circuit, so the exit status of the test itself is not what escapes.
 if [ "$RESULT" -eq 0 ]; then RESULT=$FEATURE_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$WAVE3_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRACT_RESULT; fi
+if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRAST_RESULT; fi
 
 exit "$RESULT"
