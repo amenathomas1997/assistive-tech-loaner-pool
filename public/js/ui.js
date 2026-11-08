@@ -162,7 +162,9 @@ export const toastWarn = (message, title) => toast(message, { type: 'warn', titl
  *
  * Resolves with the value passed to `close()`, or null if dismissed.
  */
-export function modal({ title, body, actions = [], wide = false, onOpen = null }) {
+export function modal({
+  title, body, actions = [], wide = false, onOpen = null, startAtTop = false,
+}) {
   return new Promise((resolve) => {
     const previouslyFocused = document.activeElement;
     const titleId = `modal-title-${Math.random().toString(36).slice(2, 8)}`;
@@ -210,11 +212,21 @@ export function modal({ title, body, actions = [], wide = false, onOpen = null }
     document.body.append(dialog);
     dialog.showModal();
 
-    // Focus the first meaningful control rather than the close button.
-    const firstField = dialog.querySelector(
-      '.modal-body input:not([type="hidden"]), .modal-body select, .modal-body textarea, .modal-body button',
-    );
-    (firstField || dialog.querySelector('.modal-footer .btn') || dialog).focus();
+    // Focus the first meaningful control rather than the close button — but
+    // only where the dialog is a form. A dialog that is mostly reading matter
+    // takes focus at the top instead: landing on a checkbox half way down
+    // means a screen reader starts there, and everything above it is never
+    // heard. The dialog is labelled by its heading, so focusing it announces
+    // the title and leaves the person at the beginning of the content.
+    if (startAtTop) {
+      dialog.tabIndex = -1;
+      dialog.focus();
+    } else {
+      const firstField = dialog.querySelector(
+        '.modal-body input:not([type="hidden"]), .modal-body select, .modal-body textarea, .modal-body button',
+      );
+      (firstField || dialog.querySelector('.modal-footer .btn') || dialog).focus();
+    }
 
     if (onOpen) onOpen(dialog, close);
   });

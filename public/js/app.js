@@ -9,6 +9,10 @@
 
 import { api, ApiError, onSessionExpired } from './api.js';
 import {
+  installShortcuts, availableDestinations, SINGLE_KEYS, findPageSearch,
+  shortcutsEnabled, setShortcutsEnabled,
+} from './shortcuts.js';
+import {
   el, clear, $, field, toast, toastError, toastOk, toastWarn, announce, alert as alertBox,
   modal, confirmDialog, withBusy, focusHeading, loadingBlock,
 } from './ui.js';
@@ -167,11 +171,39 @@ function initials(name) {
 }
 
 function buildShell() {
-  navRegion = el('nav', { class: 'app-nav', 'aria-label': 'Main' });
-  mainRegion = el('main', { class: 'app-main', id: 'main-content', tabindex: '-1' });
+  // Landmarks carry names because a screen reader's region list reads the
+  // names, not the tags. "navigation" twice over tells somebody nothing;
+  // "Sections" and "Account" tell them which one to enter.
+  navRegion = el('nav', { class: 'app-nav', 'aria-label': 'Sections' });
+  mainRegion = el('main', {
+    class: 'app-main', id: 'main-content', tabindex: '-1',
+    'aria-label': 'Main content',
+  });
 
   const shell = el('div', { class: 'app-shell' }, [
-    el('header', { class: 'app-header' }, [
+    // "Skip to main content" is already the first focusable thing in
+    // app.html, where it works before this script has even loaded. These two
+    // are the extra ones, and they need JavaScript: the sidebar does not
+    // exist until somebody is signed in, and the search box differs per
+    // screen. A keyboard user arriving mid-task usually wants one of them,
+    // and tabbing to either means crossing everything in between.
+    el('div', { class: 'skip-links' }, [
+      el('a', {
+        class: 'skip-link', href: '#app-nav',
+        onClick: (e) => { e.preventDefault(); focusRegion(navRegion, 'Sections'); },
+      }, 'Skip to section links'),
+      el('a', {
+        class: 'skip-link', id: 'skip-to-search', href: '#main-content', hidden: true,
+        onClick: (e) => {
+          e.preventDefault();
+          const search = findPageSearch();
+          if (search) { search.focus(); search.select?.(); }
+          else announce('This screen has no search.');
+        },
+      }, 'Skip to search'),
+    ]),
+
+    el('header', { class: 'app-header', 'aria-label': 'Loaner Pool' }, [
       el('a', { class: 'brand', href: '#/dashboard' }, [
         el('span', { class: 'brand-mark', 'aria-hidden': 'true' }, [
           svgIcon('M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z M3.27 6.96 12 12.01l8.73-5.05 M12 22.08V12'),
@@ -182,7 +214,7 @@ function buildShell() {
         ]),
       ]),
 
-      el('div', { class: 'header-actions' }, [
+      el('div', { class: 'header-actions', role: 'group', 'aria-label': 'Account' }, [
         // SC 3.2.6 Consistent Help: this control is in the same place on
         // every screen of the application.
         el('button', {
@@ -205,10 +237,66 @@ function buildShell() {
     ]),
 
     el('div', { class: 'app-body' }, [navRegion, mainRegion]),
+
+    // A real contentinfo landmark. Small, but it is the region a screen
+    // reader user jumps to looking for "what is this and who runs it".
+    el('footer', { class: 'app-footer', 'aria-label': 'About this installation' }, [
+      el('p', {}, [
+        session.organization?.name || 'Loaner Pool',
+        ' · ',
+        el('button', {
+          type: 'button', class: 'linkish',
+          onClick: showHelp,
+        }, 'Keyboard shortcuts and help'),
+      ]),
+    ]),
   ]);
+
+  navRegion.id = 'app-nav';
+  navRegion.tabIndex = -1;
 
   clear(root).append(shell);
   renderNav();
+
+  // Installed once, with the shell. Nothing here is destructive: every
+  // shortcut either moves you or opens help.
+  installShortcuts({
+    navigate: (path) => { window.location.hash = `#/${path}`; },
+    showHelp,
+    can,
+    announce,
+  });
+}
+
+/**
+ * Show or hide the "Skip to search" link to match the screen.
+ *
+ * Offering it on a screen with no search is worse than not offering it: a
+ * keyboard user tabs to a link, presses it, and is told the thing it names
+ * does not exist. Hidden when there is nothing to skip to, and pointed at
+ * the real field when there is, so the link works on its href alone.
+ */
+function syncSearchSkipLink() {
+  const link = document.getElementById('skip-to-search');
+  if (!link) return;
+
+  const search = findPageSearch();
+
+  if (!search) {
+    link.hidden = true;
+    return;
+  }
+
+  if (!search.id) search.id = 'page-search';
+  link.href = `#${search.id}`;
+  link.hidden = false;
+}
+
+/** Move focus into a landmark and say which one it is. */
+function focusRegion(region, name) {
+  if (!region) return;
+  region.focus();
+  announce(`${name} region.`);
 }
 
 function svgIcon(path) {
@@ -317,6 +405,7 @@ async function handleRoute() {
       ]),
     );
     document.title = 'Not found — Loaner Pool';
+    syncSearchSkipLink();
     focusHeading(mainRegion);
     return;
   }
@@ -336,6 +425,7 @@ async function handleRoute() {
       ]),
     );
     document.title = 'No access — Loaner Pool';
+    syncSearchSkipLink();
     focusHeading(mainRegion);
     return;
   }
@@ -343,6 +433,8 @@ async function handleRoute() {
   document.title = `${route.title} — Loaner Pool`;
   renderNav();
   clear(mainRegion).append(loadingBlock(`Loading ${route.title.toLowerCase()}…`));
+  // The previous screen's search went with its content.
+  syncSearchSkipLink();
 
   try {
     const content = await route.render({ params, navigate, session });
@@ -350,6 +442,7 @@ async function handleRoute() {
     if (token !== renderToken) return;
 
     clear(mainRegion).append(content);
+    syncSearchSkipLink();
     focusHeading(mainRegion);
     announce(`${route.title} loaded.`);
   } catch (err) {
@@ -381,6 +474,8 @@ function showHelp() {
   modal({
     title: 'Help',
     wide: false,
+    // Reading matter, not a form.
+    startAtTop: true,
     body: el('div', { class: 'stack' }, [
       el('h3', { text: 'Scanning' }),
       el('p', {
@@ -395,12 +490,40 @@ function showHelp() {
           'Search for it on the Devices screen and use the check-out or check-in button there. ' +
           'Everything a scanner can do can also be done by hand.',
       }),
-      el('h3', { text: 'Keyboard shortcuts' }),
-      el('ul', {}, [
-        el('li', { text: 'Tab and Shift+Tab move between controls.' }),
-        el('li', { text: 'Escape closes any dialog.' }),
-        el('li', { text: 'The "Skip to main content" link appears when you first press Tab.' }),
-      ]),
+      el('h3', { id: 'help-keyboard', text: 'Keyboard shortcuts' }),
+
+      el('p', {
+        text:
+          'Press Tab from the top of any screen to reach the skip links: main content, the section '
+          + 'links, and — on screens that have one — the search box.',
+      }),
+
+      // A definition list, not a table: each shortcut is a term and its
+      // meaning, which is what a screen reader will read as a pair.
+      el('dl', { class: 'shortcut-list' }, SINGLE_KEYS.flatMap((s) => [
+        el('dt', {}, el('kbd', { text: s.key })),
+        el('dd', { text: s.label }),
+      ])),
+
+      el('h4', { text: 'Go to a screen' }),
+      el('p', { text: 'Press G, let go, then press the letter. Escape cancels.' }),
+
+      el('dl', { class: 'shortcut-list' }, availableDestinations(can).flatMap((d) => [
+        el('dt', {}, [el('kbd', { text: 'G' }), ' ', el('kbd', { text: d.keys.toUpperCase() })]),
+        el('dd', { text: d.label }),
+      ])),
+
+      el('p', {
+        class: 'field-help',
+        text:
+          'Shortcuts never fire while you are typing in a text box, and none of them changes or '
+          + 'deletes anything — each one moves you somewhere or opens this help.',
+      }),
+
+      // SC 2.1.4 Character Key Shortcuts: a single-character shortcut has to
+      // be switchable off. The switch lives here, beside the list it governs,
+      // rather than buried in settings.
+      shortcutToggle(),
       el('h3', { text: 'Who to contact' }),
       el('p', {
         text: session.organization?.contact_email
@@ -410,6 +533,34 @@ function showHelp() {
     ]),
     actions: [{ label: 'Close', class: 'btn-primary', value: null }],
   });
+}
+
+/** The on/off switch for the single-key shortcuts. */
+function shortcutToggle() {
+  const input = el('input', {
+    type: 'checkbox', id: 'shortcuts-on', checked: shortcutsEnabled(),
+  });
+
+  input.addEventListener('change', () => {
+    setShortcutsEnabled(input.checked);
+    announce(input.checked
+      ? 'Keyboard shortcuts are on.'
+      : 'Keyboard shortcuts are off. Tab, Shift+Tab and Escape still work.');
+  });
+
+  return el('label', { class: 'checkbox', for: 'shortcuts-on' }, [
+    input,
+    el('span', {}, [
+      'Use single-key shortcuts',
+      el('span', {
+        class: 'option-help',
+        text: 'Turn this off if you use speech recognition, or if a single keypress reaching the '
+            + 'page would get in your way. It switches off every one of them, this list '
+            + 'included — the Help button at the top of the screen still opens it. '
+            + 'Remembered on this browser.',
+      }),
+    ]),
+  ]);
 }
 
 // ---------------------------------------------------------------------------
