@@ -19,7 +19,7 @@ namespace Loaner;
 final class Migrations
 {
     /** Highest version this build knows about. */
-    public const TARGET_VERSION = 5;
+    public const TARGET_VERSION = 6;
 
     // -----------------------------------------------------------------------
     // Idempotent DDL helpers
@@ -578,6 +578,20 @@ final class Migrations
                     // away silently removed a working second factor.
                     self::addColumn('users', 'totp_pending_secret',
                         'VARCHAR(255) DEFAULT NULL', $log);
+                },
+            ],
+            [
+                'version' => 6,
+                'name'    => 'Remember the last two-factor step used',
+                'up'      => static function (array &$log): void {
+                    // A TOTP code is valid for a window of about ninety
+                    // seconds, and until this column existed it could be used
+                    // any number of times inside that window. Someone who had
+                    // the password and glimpsed one code could sign in after
+                    // the owner had. The last accepted time step is kept so a
+                    // code works once (RFC 6238 §5.2).
+                    self::addColumn('users', 'totp_last_counter',
+                        'BIGINT UNSIGNED DEFAULT NULL', $log);
                 },
             ],
         ];

@@ -289,7 +289,7 @@ as SC 2.1.4 requires, and never fire while you are typing.
 ```
 
 Drops and recreates the test database, runs the web installer through its own
-API, then exercises the application end to end — 583 checks covering
+API, then exercises the application end to end — 655 checks covering
 authentication, RBAC, spreadsheet import, barcode encoding, the loan
 lifecycle, the request workflow, kits and accessories, agreements and
 signatures, condition photos, the waitlist, repairs, funding reporting, bulk
@@ -319,16 +319,29 @@ DOM's own `append()` stringifies a null into the four characters "null" and
 shows them to the user, while the `el()` and `mount()` helpers filter it —
 two idioms that look identical and are not. Four call sites had it.
 
+**The security suite** holds the findings of the November 2026 code audit,
+each reproduced before it was fixed: a forged `X-Forwarded-For` landing in the
+audit log, a cookie-authenticated write accepted from another site's page, a
+lockout that re-armed on the first miss after it expired, a spreadsheet export
+carrying a formula, a backup carrying live session ids, and a two-factor code
+accepted twice. `scripts/e2e-security.sh` proves each over HTTP;
+`scripts/verify-security.php` holds the decision tables an HTTP test cannot
+reach — the lockout window and TOTP time steps, which need time to pass.
+
 Barcode encoders alone, with no database:
 
 ```bash
 php scripts/verify-barcode.php
 ```
 
-The two source checks, with no database or server:
+The source and logic checks, with no database or server:
 
 ```bash
 php scripts/verify-append-safety.php
+```
+
+```bash
+php scripts/verify-security.php
 ```
 
 ```bash

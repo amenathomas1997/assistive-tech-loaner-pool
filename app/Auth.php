@@ -231,7 +231,7 @@ final class Auth
             'path'     => '/',
             'httponly' => true,
             'samesite' => 'Lax',
-            'secure'   => (bool) (Config::get()['session']['secureCookies'] ?? false),
+            'secure'   => self::cookieMustBeSecure(),
         ]);
     }
 
@@ -242,8 +242,24 @@ final class Auth
             'path'     => '/',
             'httponly' => true,
             'samesite' => 'Lax',
-            'secure'   => (bool) (Config::get()['session']['secureCookies'] ?? false),
+            'secure'   => self::cookieMustBeSecure(),
         ]);
+    }
+
+    /**
+     * Whether the session cookie carries the Secure flag.
+     *
+     * Either because the configuration says so, or because this very request
+     * arrived over TLS. The second rule is the one that matters: the installer
+     * sets the configuration flag from the URL it was run at, and a site that
+     * later gained HTTPS keeps a config that says false. A session issued over
+     * HTTPS must never be sent back over plain HTTP, whatever a file written
+     * on installation day says — and a cookie marked Secure costs nothing on a
+     * site that is HTTPS anyway.
+     */
+    private static function cookieMustBeSecure(): bool
+    {
+        return (bool) (Config::get()['session']['secureCookies'] ?? false) || Request::detectSecure();
     }
 
     // -----------------------------------------------------------------------
@@ -283,7 +299,7 @@ final class Auth
         }
 
         if (!self::verifyPassword($password, $user['password_hash'])) {
-            $failed     = (int) $user['failed_logins'] + 1;
+            $failed     = self::failedLoginsAfterMiss((int) $user['failed_logins'], $user['locked_until']);
             $shouldLock = $failed >= self::MAX_FAILED_LOGINS;
 
             Db::execute(
@@ -321,6 +337,35 @@ final class Auth
         Db::execute('UPDATE users SET last_login_at = NOW() WHERE id = ?', [$user['id']]);
 
         return ['ok' => true, 'user' => $user];
+    }
+
+    /**
+     * The failed-attempt count after one more miss.
+     *
+     * The count was never reset when a lockout expired. It sat at the
+     * threshold, so the first wrong password after the fifteen minutes were
+     * up locked the account again — and the person was told "not recognised"
+     * rather than "locked", because the lock is set on the attempt that
+     * trips it and only reported on the next. One mistyped password every
+     * fifteen minutes kept an account locked indefinitely, which is the
+     * outage the comment on MAX_FAILED_LOGINS says this must not cause.
+     *
+     * So an expired lockout starts a fresh window: the miss that ends it
+     * counts as the first of a new eight, not the ninth of the old.
+     *
+     * Pure, so the rule can be checked without a database.
+     *
+     * @param string|null $lockedUntil MySQL datetime, or null when never locked
+     */
+    public static function failedLoginsAfterMiss(int $previousFailed, ?string $lockedUntil, ?int $now = null): int
+    {
+        $now = $now ?? time();
+
+        if ($lockedUntil !== null && strtotime($lockedUntil) <= $now) {
+            return 1;
+        }
+
+        return $previousFailed + 1;
     }
 
     /**
@@ -398,7 +443,8 @@ final class Auth
         $pending = Db::one(
             'SELECT p.attempts, p.expires_at,
                     u.id AS user_id, u.organization_id, u.email, u.full_name, u.role,
-                    u.active, u.must_change_password, u.totp_secret, u.totp_enabled
+                    u.active, u.must_change_password, u.totp_secret, u.totp_enabled,
+                    u.totp_last_counter
                FROM pending_logins p JOIN users u ON u.id = p.user_id
               WHERE p.id = ? AND p.expires_at > NOW()',
             [Util::sha256($pendingId)],
@@ -421,7 +467,16 @@ final class Auth
         // six-digit code never burns one.
         $usedRecovery = false;
 
-        if (!Totp::verify((string) $secret, $clean)) {
+        // A code is right for a particular thirty-second step, and that step
+        // may be spent once. Without this, a code glimpsed over a shoulder
+        // worked for the rest of its ninety-second window — after the owner
+        // had already used it. claimCounter() refuses a step at or before the
+        // last one accepted, atomically, so two sign-ins racing on one code
+        // cannot both get through (RFC 6238 §5.2).
+        $counter = Totp::matchCounter((string) $secret, $clean);
+        $accepted = $counter !== null && Totp::claimCounter((int) $pending['user_id'], $counter);
+
+        if (!$accepted) {
             if (!Totp::consumeRecoveryCode((int) $pending['user_id'], $clean)) {
                 Db::execute(
                     'UPDATE pending_logins SET attempts = attempts + 1 WHERE id = ?',
@@ -580,6 +635,91 @@ final class Auth
             'ip'                 => $request->ip,
         ];
     }
+
+    /**
+     * Refuse a state-changing request that a browser sent from another site.
+     *
+     * The session cookie is SameSite=Lax, which stops a page on a different
+     * *site* from posting here with the cookie attached. But "site" means the
+     * registrable domain: a page on any other subdomain of the same domain is
+     * same-site, its forms and fetches carry this cookie, and Lax does nothing.
+     * An installation at loanerpool.example.org therefore trusts every other
+     * thing hosted under example.org — on a shared account that is whatever
+     * else the owner has put there, and its security, not this application's.
+     *
+     * Browsers send an Origin header on every cross-origin request that could
+     * change state, and on same-origin POSTs too. So: if a cookie-authenticated
+     * write arrives with an Origin for a different host, it did not come from
+     * this application's own pages, and it is refused. A request with no
+     * Origin at all is allowed through — that is a non-browser client such as
+     * curl, which has no cookie jar an attacker can borrow.
+     *
+     * Host only, not scheme. Behind a proxy that terminates TLS the scheme
+     * this process sees can differ from the one the browser used, and a check
+     * that failed on that would lock every user out of every form.
+     *
+     * API keys are exempt: a bearer token is not sent by a browser on another
+     * site's behalf, which is the whole problem being solved here.
+     */
+    public static function rejectCrossSiteWrite(Request $request): void
+    {
+        if (($request->auth['actorType'] ?? null) !== 'user') {
+            return;
+        }
+
+        if (in_array($request->method, ['GET', 'HEAD', 'OPTIONS'], true)) {
+            return;
+        }
+
+        $origin = $request->header('Origin');
+
+        if ($origin === null || $origin === '' || $origin === 'null') {
+            // No Origin: not a browser form or fetch. "null" is what a browser
+            // sends from a sandboxed or opaque context, and a write from one
+            // of those is not something this application ever does itself.
+            if ($origin === 'null') {
+                throw new HttpError(403, 'cross_site_request', self::CROSS_SITE_MESSAGE);
+            }
+
+            return;
+        }
+
+        if (!self::sameHost($origin, (string) ($_SERVER['HTTP_HOST'] ?? ''))) {
+            throw new HttpError(403, 'cross_site_request', self::CROSS_SITE_MESSAGE);
+        }
+    }
+
+    /**
+     * Does an Origin name the host this request was addressed to?
+     *
+     * Hostnames only. Ports are dropped from both sides: HTTP_HOST carries one
+     * only when it is not the scheme's default and Origin likewise, so a
+     * literal comparison fails on exactly the ordinary case of a proxy on 443
+     * in front of PHP on something else. Two ports on one hostname are not two
+     * tenants on the hosting this is written for.
+     *
+     * Pure, so scripts/verify-security.php can table-test it.
+     */
+    public static function sameHost(string $origin, string $requestHost): bool
+    {
+        $originHost = strtolower((string) parse_url($origin, PHP_URL_HOST));
+
+        if ($originHost === '') {
+            return false;
+        }
+
+        $requestHost = strtolower(preg_replace('/:\d+$/', '', $requestHost) ?? '');
+
+        // Bracketed IPv6 literals: parse_url strips the brackets, HTTP_HOST keeps them.
+        $requestHost = trim($requestHost, '[]');
+        $originHost  = trim($originHost, '[]');
+
+        return $originHost === $requestHost;
+    }
+
+    private const CROSS_SITE_MESSAGE =
+        'This request came from a page on a different site, so it was not carried out. '
+        . 'If you were using Loaner Pool itself, reload the page and try again.';
 
     public static function requireAuth(Request $request): array
     {

@@ -14,6 +14,15 @@
  * This file is the whole database: every client, every loan, and the password
  * hashes of every account. It is gated like the updater and never written to
  * disk inside the web root.
+ *
+ * With one deliberate omission. A handful of tables hold live credentials and
+ * transient state — session ids, half-finished sign-ins, reset tokens, phone
+ * pairing codes — and their rows are left out. A backup is the file most
+ * likely to be emailed, left on a laptop or restored somewhere less careful,
+ * and a session id in it is a signed-in browser for up to fourteen days. The
+ * tables themselves are still created, so a restore produces a complete,
+ * working schema in which everyone simply has to sign in again — which is
+ * what should happen after a restore anyway.
  */
 
 declare(strict_types=1);
@@ -24,6 +33,20 @@ final class Backup
 {
     /** Rows read at a time. Bounded so a large table cannot exhaust memory. */
     private const CHUNK = 500;
+
+    /**
+     * Tables whose structure is dumped but whose rows are not.
+     *
+     * Each is either a live credential or state that is meaningless an hour
+     * later. None is needed to restore the organisation's records.
+     */
+    private const STRUCTURE_ONLY = [
+        'sessions'        => 'session ids are live sign-ins for up to fourteen days',
+        'pending_logins'  => 'half-finished two-factor sign-ins, valid for ten minutes',
+        'password_resets' => 'reset tokens, valid for an hour',
+        'scan_channels'   => 'phone pairing codes, valid for a few hours',
+        'scan_events'     => 'barcodes a phone sent to a desk, kept for twelve hours',
+    ];
 
     /**
      * Stream a backup to the browser.
@@ -149,7 +172,10 @@ final class Backup
             . "-- each table is dropped and recreated below.\n"
             . "--\n"
             . "-- This file contains personal data about clients and the password\n"
-            . "-- hashes of every account. Store it accordingly.\n\n"
+            . "-- hashes of every account. Store it accordingly.\n"
+            . "--\n"
+            . "-- Sessions, pending sign-ins, reset tokens and phone pairing codes are\n"
+            . "-- created empty: after a restore everyone signs in again.\n\n"
             . "SET FOREIGN_KEY_CHECKS = 0;\n"
             . "SET NAMES utf8mb4;\n"
             . "SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';\n\n";
@@ -186,6 +212,11 @@ final class Backup
         self::write("\n--\n-- Table: {$table}\n--\n\n");
         self::write("DROP TABLE IF EXISTS {$quoted};\n");
         self::write($ddl . ";\n\n");
+
+        if (isset(self::STRUCTURE_ONLY[$table])) {
+            self::write('-- (rows deliberately not included: ' . self::STRUCTURE_ONLY[$table] . ")\n");
+            return;
+        }
 
         $count = (int) Db::value("SELECT COUNT(*) FROM {$quoted}");
 

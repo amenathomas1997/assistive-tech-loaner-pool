@@ -81,3 +81,33 @@ So you can audit it rather than take it on trust:
   fixed allowlists, never interpolated.
 - The audit log is append-only. Nothing in the codebase issues `UPDATE` or
   `DELETE` against it, including for administrators.
+
+## Hardening that is on by default
+
+So a report does not duplicate something already in place:
+
+- **Sessions** are random 256-bit ids stored server-side; the cookie is
+  `HttpOnly`, `SameSite=Lax`, and `Secure` whenever the request arrived over
+  TLS, whatever the configuration file says. Changing or resetting a password
+  ends every other session.
+- **Cross-site writes are refused.** `SameSite=Lax` does not help against a
+  page on a sibling subdomain, which is the common case on shared hosting, so
+  a cookie-authenticated request that changes state is refused when its
+  `Origin` names another host.
+- **`X-Forwarded-For` is ignored** unless `LOANER_TRUST_PROXY=1` is set, so a
+  visitor cannot choose what address the audit log records.
+- **Two-factor codes work once.** The last accepted time step is stored per
+  user, so a code cannot be replayed inside its window (RFC 6238 §5.2).
+- **Failed sign-ins** lock an account for fifteen minutes after eight misses,
+  and the count starts fresh once a lock has expired.
+- **Backups omit live credentials.** Session ids, pending sign-ins, reset
+  tokens and pairing codes are structure-only in the SQL dump.
+- **Spreadsheet exports** prefix cells that begin with `=`, `+`, `-`, `@` or a
+  tab, so a name typed as a formula does not run in Excel.
+- **HSTS** is sent on HTTPS responses (one year, no subdomains).
+- **Content Security Policy** is `script-src 'self'` with no inline scripts;
+  all theme and keyboard behaviour is in separate files for that reason.
+- **Uploads** are decoded from data URLs, checked with `getimagesize`, limited
+  to JPEG/PNG/WebP and 8 MB, stored outside the web root under random names,
+  and served only through an authenticated route that re-checks the path is
+  inside the uploads directory.

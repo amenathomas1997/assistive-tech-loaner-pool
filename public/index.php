@@ -30,6 +30,15 @@ header('X-Frame-Options: DENY');
 header('Referrer-Policy: same-origin');
 header_remove('X-Powered-By');
 
+// Only once the site is actually being served over TLS, because the header
+// is a promise the browser holds the site to for a year: sent over plain
+// HTTP during setup it would be a promise about a certificate that does not
+// exist yet. No includeSubDomains — the other names under this domain are not
+// this application's to make promises for.
+if ($request->secure) {
+    header('Strict-Transport-Security: max-age=31536000');
+}
+
 // No inline event handlers or remote assets anywhere in this app, so the
 // policy can be strict. 'unsafe-inline' is allowed for styles only, which the
 // label sheet and the printable agreement use for print-specific rules.
@@ -172,6 +181,11 @@ try {
     }
 
     Auth::attach($request);
+
+    // A write carrying a session cookie but sent from another site's page is
+    // refused before any route sees it. See Auth::rejectCrossSiteWrite for
+    // why SameSite=Lax alone is not enough on a shared domain.
+    Auth::rejectCrossSiteWrite($request);
 
     if (str_starts_with($request->path, '/api/')) {
         // Both /api/v1/... and the unversioned alias reach the same table. The

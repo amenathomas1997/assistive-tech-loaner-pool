@@ -161,6 +161,19 @@ echo "==> Checking the API/UI contract"
 ./scripts/verify-ui-contract.sh "http://localhost:$PORT"
 CONTRACT_RESULT=$?
 
+# Last of the HTTP suites: it enrols and then removes a second factor on the
+# administrator, and the coverage suite above asserts that two-factor is off.
+echo "==> Running security suite"
+./scripts/e2e-security.sh "http://localhost:$PORT"
+SECURITY_RESULT=$?
+
+# Needs no server: the security rules that are pure functions, held to a
+# table of cases — the lockout window and TOTP steps, which an HTTP test
+# cannot make time pass for.
+echo "==> Checking security decision tables"
+php scripts/verify-security.php
+SECURITY_TABLES_RESULT=$?
+
 # Which routes did all of that actually reach? Answers the question the
 # suites above cannot: not "does what we test work" but "what are we not
 # testing". Runs last, because it needs every suite's requests in the log.
@@ -190,5 +203,7 @@ if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRACT_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRAST_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$COVERAGE_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$APPEND_RESULT; fi
+if [ "$RESULT" -eq 0 ]; then RESULT=$SECURITY_RESULT; fi
+if [ "$RESULT" -eq 0 ]; then RESULT=$SECURITY_TABLES_RESULT; fi
 
 exit "$RESULT"

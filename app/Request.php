@@ -140,23 +140,61 @@ final class Request
     /**
      * The client's address.
      *
-     * X-Forwarded-For is trusted only because this is designed to run behind
-     * the host's own Apache. If you expose PHP-FPM directly to the internet,
-     * set LOANER_TRUST_PROXY=0 — otherwise a client can forge its own audit
-     * log entries' IP.
+     * X-Forwarded-For is a header any client can send. It is only meaningful
+     * when a reverse proxy this server trusts has set it, and nothing about a
+     * request can prove that — so it is believed only when the operator has
+     * said so with LOANER_TRUST_PROXY=1.
+     *
+     * The previous default was the other way round: trusted unless switched
+     * off. On the shared Apache this is written for there is no proxy in
+     * front of PHP, so any visitor could put any address into the audit log —
+     * "Failed sign-in attempt from 203.0.113.77" with the real address nowhere
+     * in the record. An audit trail that the subject can write is worse than
+     * one that is merely incomplete.
+     *
+     * Behind a proxy the cost of the new default is that every entry shows the
+     * proxy's address until the variable is set. That is visible, and the
+     * deployment guide says how to fix it. The old failure was invisible.
      */
     private static function clientIp(): string
     {
-        $trustProxy = getenv('LOANER_TRUST_PROXY') !== '0';
+        $remote    = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+        $forwarded = (string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '');
 
-        if ($trustProxy && !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $first = trim(explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'])[0]);
+        return self::resolveClientIp($remote, $forwarded, getenv('LOANER_TRUST_PROXY'));
+    }
+
+    /**
+     * The policy, as a pure function so scripts/verify-security.php can hold
+     * it to a table of cases without needing a web server.
+     *
+     * @param string|false $trustProxy the LOANER_TRUST_PROXY value, or false when unset
+     */
+    public static function resolveClientIp(string $remote, string $forwarded, string|false $trustProxy): string
+    {
+        if ($trustProxy === '1' && $forwarded !== '') {
+            // The left-most address is the client as the proxy saw it. Later
+            // entries are proxies, and anything a client prepended itself is
+            // further left still — which is why only an operator-declared
+            // proxy may be believed at all.
+            $first = trim(explode(',', $forwarded)[0]);
+
             if (filter_var($first, FILTER_VALIDATE_IP)) {
                 return $first;
             }
         }
 
-        return $_SERVER['REMOTE_ADDR'] ?? '';
+        return $remote;
+    }
+
+    /**
+     * Was this request made over TLS?
+     *
+     * Public, because the session cookie's Secure flag is decided from it.
+     */
+    public static function detectSecure(): bool
+    {
+        return self::isSecure();
     }
 
     private static function isSecure(): bool

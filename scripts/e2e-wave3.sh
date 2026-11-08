@@ -53,6 +53,38 @@ api() {
 
 api POST /api/v1/auth/login '{"email":"admin@example.org","password":"correct-horse-battery-7"}' > /dev/null
 
+# A two-factor code for a time step that has not been used yet.
+#
+# Since a step can be spent only once (RFC 6238 §5.2 — the fix for a code
+# being replayable for its whole ninety-second window), this test cannot keep
+# computing "the code for now": two sign-ins inside one thirty-second step
+# would present the same code and the second would be refused, correctly. So
+# each code is for an explicit step, and the next one waits for the clock if
+# the step has not moved on. The server accepts a step either side of its
+# own, so a code computed at the end of one step still works at the start of
+# the next.
+#
+# Two functions rather than one, because the bookkeeping has to survive: a
+# function run inside $(...) is a subshell, and a variable it sets is gone
+# when it returns. next_totp_step is called directly and advances
+# LAST_TOTP_STEP in this shell; totp_code_for_step merely prints.
+LAST_TOTP_STEP=0
+TOTP_STEP=0
+next_totp_step() {
+  local now step
+  now=$(date +%s)
+  step=$(( now / 30 ))
+  if [ "$step" -le "$LAST_TOTP_STEP" ]; then
+    sleep $(( (LAST_TOTP_STEP + 1) * 30 - now ))
+    step=$(( LAST_TOTP_STEP + 1 ))
+  fi
+  LAST_TOTP_STEP=$step
+  TOTP_STEP=$step
+}
+totp_code_for_step() {
+  php -r "require 'app/bootstrap.php'; echo Loaner\\Totp::codeAt('$1', $(( $2 * 30 + 15 )));"
+}
+
 # Remove the per-client cap, which otherwise masks the seat logic below.
 api PATCH /api/v1/admin/settings '{"settings":{"loans.max_per_client":0}}' > /dev/null
 
@@ -297,7 +329,7 @@ SECRET=$(printf '%s' "$OUT" | jqv "['secret']")
 OUT=$(api POST /api/v1/auth/2fa/confirm '{"code":"000000"}')
 check "a wrong code does not enable it" "$OUT" "not right"
 
-CODE=$(php -r "require 'app/bootstrap.php'; echo Loaner\\Totp::codeAt('$SECRET');")
+next_totp_step; CODE=$(totp_code_for_step "$SECRET" "$TOTP_STEP")
 OUT=$(api POST /api/v1/auth/2fa/confirm "{\"code\":\"$CODE\"}")
 check "a correct code enables it" "$OUT" '"enabled": *true'
 check "recovery codes are issued once" "$OUT" "recovery_codes"
@@ -315,7 +347,7 @@ OUT=$(curl -s -b "$JAR" -X POST "$BASE/api/v1/auth/login/verify" -H 'Content-Typ
       -d "{\"pending_id\":\"$PENDING\",\"code\":\"999999\"}")
 check "a wrong code is refused and counted" "$OUT" "attempt"
 
-CODE=$(php -r "require 'app/bootstrap.php'; echo Loaner\\Totp::codeAt('$SECRET');")
+next_totp_step; CODE=$(totp_code_for_step "$SECRET" "$TOTP_STEP")
 OUT=$(curl -s -b "$JAR" -c "$JAR" -X POST "$BASE/api/v1/auth/login/verify" \
       -H 'Content-Type: application/json' -d "{\"pending_id\":\"$PENDING\",\"code\":\"$CODE\"}")
 check "a correct code completes the sign-in" "$OUT" '"capabilities"'
@@ -342,7 +374,7 @@ OUT=$(curl -s -b "$JAR" -X POST "$BASE/api/v1/auth/login/verify" \
       -H 'Content-Type: application/json' -d "{\"pending_id\":\"$PENDING\",\"code\":\"$RECOVERY\"}")
 check "a recovery code cannot be reused" "$OUT" "not right"
 
-CODE=$(php -r "require 'app/bootstrap.php'; echo Loaner\\Totp::codeAt('$SECRET');")
+next_totp_step; CODE=$(totp_code_for_step "$SECRET" "$TOTP_STEP")
 curl -s -b "$JAR" -c "$JAR" -X POST "$BASE/api/v1/auth/login/verify" \
   -H 'Content-Type: application/json' -d "{\"pending_id\":\"$PENDING\",\"code\":\"$CODE\"}" > /dev/null
 

@@ -430,7 +430,21 @@ final class Util
         return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
-    /** Escape a value for a CSV cell, per RFC 4180. */
+    /**
+     * Escape a value for a CSV cell, per RFC 4180 — and defuse it for Excel.
+     *
+     * A cell that begins with =, +, -, @ or a tab is a formula to a
+     * spreadsheet, not text. The exports here contain names and notes typed
+     * by anyone who can edit a client or a device, and a client whose last
+     * name was entered as =HYPERLINK("http://…") would run in the spreadsheet
+     * of whoever opened the export. Prefixing an apostrophe is the standard
+     * remedy: Excel, Sheets and LibreOffice all treat it as "this is text" and
+     * do not display it.
+     *
+     * Numbers are left alone. A purchase cost of -5.00 or a date are not
+     * formulas, and quoting them would make the file worse for the importer
+     * that reads these exports back.
+     */
     public static function csvCell(mixed $value): string
     {
         if ($value === null) {
@@ -438,6 +452,10 @@ final class Util
         }
 
         $s = is_bool($value) ? ($value ? '1' : '0') : (string) $value;
+
+        if ($s !== '' && !is_numeric($s) && preg_match('/^[=+\-@\t\r]/', $s)) {
+            $s = "'" . $s;
+        }
 
         if (preg_match('/["\r\n,]/', $s)) {
             return '"' . str_replace('"', '""', $s) . '"';

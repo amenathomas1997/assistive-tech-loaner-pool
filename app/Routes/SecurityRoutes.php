@@ -155,7 +155,9 @@ final class SecurityRoutes
             throw Util::badRequest('Start the set-up again — there is no pending secret for this account.');
         }
 
-        if (!Totp::verify($secret, $code)) {
+        $counter = Totp::matchCounter($secret, $code);
+
+        if ($counter === null) {
             throw Util::badRequest(
                 'That code is not right. Check the app is showing a code for this account, and that '
                 . 'the phone\'s clock is correct.',
@@ -163,12 +165,14 @@ final class SecurityRoutes
             );
         }
 
-        // Only now does the new secret become the live one.
+        // Only now does the new secret become the live one. The step just
+        // used is recorded with it, so the code that proved the app works
+        // cannot also be the code that signs somebody in a moment later.
         Db::execute(
             'UPDATE users SET totp_secret = totp_pending_secret, totp_pending_secret = NULL,
-                    totp_enabled = 1, totp_confirmed_at = NOW()
+                    totp_enabled = 1, totp_confirmed_at = NOW(), totp_last_counter = ?
               WHERE id = ?',
-            [$auth['userId']],
+            [$counter, $auth['userId']],
         );
 
         $codes = Totp::issueRecoveryCodes((int) $auth['userId']);

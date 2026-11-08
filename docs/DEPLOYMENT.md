@@ -78,6 +78,26 @@ into the document root as-is. `public/.htaccess` and the front controller still
 work, and `data/` is protected by its own rules, but the separate document root
 is the stronger arrangement and worth asking for.
 
+### If there is a reverse proxy in front of Apache
+
+Some hosts put nginx (cPanel's "ea-nginx"), Cloudflare or a load balancer in
+front of the web server. PHP then sees every visitor as coming from the proxy's
+address, and the real one is in the `X-Forwarded-For` header.
+
+That header is **not believed by default**, because any visitor can send one.
+On a host with no proxy, trusting it would let anyone write any address into
+the audit log. If you do have a proxy, say so — in `public/.htaccess`, or the
+control panel's environment editor:
+
+```apache
+SetEnv LOANER_TRUST_PROXY 1
+```
+
+The symptom of needing this is every entry in Settings → Audit log showing the
+same address. The symptom of setting it without a proxy is an audit log the
+subject can write, which is worse and invisible — so it is off until you turn
+it on.
+
 Skip `data/` when uploading: it is created on first run and holds your
 credentials.
 

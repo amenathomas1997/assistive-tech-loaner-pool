@@ -39,11 +39,6 @@ if ($logPath === '' || !is_file($logPath)) {
 // Routes that a test suite cannot or should not drive. Each one needs a
 // reason, because "exempt" is how a list like this becomes meaningless.
 const EXEMPT = [
-    // Streams the whole database as a download, gated on a password re-entry.
-    // A suite that ran this on every build would be writing a copy of every
-    // password hash to a temporary file.
-    'POST /admin/backup' => 'streams a full database dump',
-
     // Replaces the application's own files from GitHub, mid-run. A test that
     // ran it would be measuring whether the suite survives being overwritten
     // while it executes.

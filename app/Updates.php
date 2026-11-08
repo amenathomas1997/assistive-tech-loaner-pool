@@ -3,13 +3,16 @@
  * Update checking.
  *
  * Asks GitHub whether this installation is behind, and says what to do about
- * it. Deliberately split in two:
+ * it. Two very different operations live here:
  *
  *   - Checking is safe, so the web interface does it and shows a notice.
- *   - Applying is not, so only the command line can do that. A web route that
- *     pulls code and runs migrations is a remote code execution path the day
- *     its credential leaks, and an agency that cannot read a server log is the
- *     last place that should have one.
+ *   - Applying replaces the code this server runs. It is available from the
+ *     command line, and — because an administrator on shared hosting usually
+ *     has no shell, and software that is never updated is the larger risk —
+ *     from the browser too, through applyFromWeb(), which is gated harder
+ *     than anything else in the application: an administrator by role, their
+ *     password re-entered, one at a time, a backup first, and an audit entry.
+ *     See the note on that method for the full reasoning.
  *
  * The result is cached on disk rather than in the database: it describes the
  * files on this server, not the organisation's data, and a restored database
@@ -480,8 +483,9 @@ final class Updates
      * Pull and migrate.
      *
      * Refuses rather than forces: a clean, current checkout updates cleanly,
-     * and anything else is a judgement for the person at the keyboard. Nothing
-     * here is reachable from the web.
+     * and anything else is a judgement for the person at the keyboard. From
+     * the web this is reached only through applyFromWeb(), which has done the
+     * authorisation first; any other non-console caller is refused below.
      */
     public static function apply(array $options = []): array
     {

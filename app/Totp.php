@@ -60,30 +60,66 @@ final class Totp
      *
      * Compared with hash_equals so the time taken does not reveal how much of
      * a guess was correct.
+     *
+     * Stateless, and therefore not enough on its own: within the ±1 window the
+     * same code is "right" for up to ninety seconds, however many times it is
+     * presented. Callers that sign people in use matchCounter() and remember
+     * the counter, which is what RFC 6238 §5.2 requires — a verifier must not
+     * accept the second attempt of the same OTP.
      */
     public static function verify(string $secret, string $code, ?int $timestamp = null): bool
+    {
+        return self::matchCounter($secret, $code, $timestamp) !== null;
+    }
+
+    /**
+     * Which time step this code belongs to, or null if it is not a valid code.
+     *
+     * The counter is what makes replay detectable: a code read over somebody's
+     * shoulder is the code for one thirty-second step, and once that step has
+     * been used to sign in it must not work again — even though, on the clock
+     * alone, it is still inside the window.
+     */
+    public static function matchCounter(string $secret, string $code, ?int $timestamp = null): ?int
     {
         $code = preg_replace('/[^0-9]/', '', $code) ?? '';
 
         if (strlen($code) !== self::DIGITS) {
-            return false;
+            return null;
         }
 
         $key = self::base32Decode($secret);
 
         if ($key === '') {
-            return false;
+            return null;
         }
 
         $counter = intdiv($timestamp ?? time(), self::PERIOD);
 
         for ($offset = -self::DRIFT; $offset <= self::DRIFT; $offset++) {
             if (hash_equals(self::hotp($key, $counter + $offset), $code)) {
-                return true;
+                return $counter + $offset;
             }
         }
 
-        return false;
+        return null;
+    }
+
+    /**
+     * Record that a time step has been spent, refusing if it already was.
+     *
+     * One conditional UPDATE rather than a read and a write, for the same
+     * reason as consumeRecoveryCode(): two sign-ins racing with the same code
+     * must not both succeed. Strictly increasing, so an older step cannot be
+     * replayed after a newer one has been used either.
+     */
+    public static function claimCounter(int $userId, int $counter): bool
+    {
+        return Db::execute(
+            'UPDATE users SET totp_last_counter = ?
+              WHERE id = ? AND (totp_last_counter IS NULL OR totp_last_counter < ?)',
+            [$counter, $userId, $counter],
+        ) === 1;
     }
 
     /** HOTP (RFC 4226): HMAC-SHA1, dynamic truncation, modulo 10^digits. */
