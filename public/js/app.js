@@ -9,7 +9,7 @@
 
 import { api, ApiError, onSessionExpired } from './api.js';
 import {
-  el, clear, $, field, toast, toastError, toastOk, announce, alert as alertBox,
+  el, clear, $, field, toast, toastError, toastOk, toastWarn, announce, alert as alertBox,
   modal, confirmDialog, withBusy, focusHeading, loadingBlock,
 } from './ui.js';
 
@@ -416,6 +416,129 @@ function showHelp() {
 // Sign in
 // ---------------------------------------------------------------------------
 
+/** Everything that happens once an identity is finally established. */
+function completeSignIn(result) {
+  session.user = result.user;
+  session.organization = result.organization;
+  session.capabilities = result.capabilities;
+  session.actorType = 'user';
+
+  announce(`Signed in as ${result.user.full_name}.`);
+  start();
+
+  if (result.must_change_password) promptPasswordChange();
+
+  // Said after the dashboard has rendered, so it is advice rather than a
+  // barrier — an administrator who has not enrolled yet still has to be able
+  // to get in and do it.
+  if (result.must_enrol_2fa) {
+    toastWarn(
+      'This organisation requires administrators to use a second factor. Set one up from your ' +
+      'account settings.',
+      'Two-factor sign-in needed',
+    );
+  }
+
+  if (result.recovery_notice) {
+    toastWarn(result.recovery_notice, 'You used a recovery code');
+  }
+}
+
+/**
+ * The second step of a two-factor sign-in.
+ *
+ * A separate screen with its own heading and its own focus, because this is
+ * the point at which somebody who has lost their phone needs to find the way
+ * out — so the recovery route is on screen, not hidden behind a link.
+ */
+function renderSecondFactor(login, email) {
+  const codeField = field({
+    name: 'code',
+    label: 'Six-digit code',
+    required: true,
+    // one-time-code lets iOS and Android offer the code from the keyboard,
+    // and tells a password manager what this field is for. inputmode numeric
+    // brings up the number pad without rejecting a pasted recovery code.
+    autocomplete: 'one-time-code',
+    inputmode: 'numeric',
+    help: login.can_recover
+      ? 'From your authenticator app. A recovery code works here too.'
+      : 'From your authenticator app.',
+  });
+
+  const errorRegion = el('div', { role: 'alert' });
+  const submitButton = el('button', { type: 'submit', class: 'btn btn-primary btn-block btn-lg' },
+    'Verify and sign in');
+
+  const form = el('form', {
+    novalidate: true,
+    onSubmit: async (event) => {
+      event.preventDefault();
+      clear(errorRegion);
+      codeField.setError(null);
+
+      const code = codeField.control.value.trim();
+
+      if (!code) {
+        codeField.setError('Enter the code from your app.');
+        codeField.control.focus();
+        return;
+      }
+
+      await withBusy(submitButton, 'Checking…', async () => {
+        try {
+          completeSignIn(await api.verifySecondFactor(login.pending_id, code));
+        } catch (err) {
+          const message = err instanceof ApiError ? err.message : 'Could not verify that code.';
+          errorRegion.append(alertBox(message, { type: 'danger', title: 'Not verified' }));
+          announce(`Not verified. ${message}`, { assertive: true });
+          codeField.control.value = '';
+          codeField.control.focus();
+        }
+      });
+    },
+  }, [codeField, submitButton]);
+
+  clear(root).append(el('div', { class: 'centred-page' }, [
+    el('div', { class: 'centred-card' }, [
+      el('div', { class: 'brand-block' }, [
+        el('span', { class: 'brand-mark-lg', 'aria-hidden': 'true' }, [
+          svgIcon('M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z M3.27 6.96 12 12.01l8.73-5.05 M12 22.08V12'),
+        ]),
+        el('h1', { text: 'One more step' }),
+        el('p', { text: `Signing in as ${email}.` }),
+      ]),
+      el('div', { class: 'card' }, [
+        errorRegion,
+        form,
+        el('details', { style: { marginTop: '16px' } }, [
+          el('summary', { text: 'I have lost my phone' }),
+          el('p', {
+            class: 'field-help',
+            text: login.recovery_hint
+              || 'Enter one of the recovery codes you saved when you set this up.',
+          }),
+          el('p', {
+            class: 'field-help',
+            text: 'If you have no codes left, another administrator can turn two-factor off for '
+                + 'your account from the staff list.',
+          }),
+        ]),
+        el('button', {
+          type: 'button', class: 'btn btn-ghost btn-block', style: { marginTop: '12px' },
+          onClick: () => renderSignIn({ message: 'Signing in was cancelled.' }),
+        }, 'Start again'),
+      ]),
+    ]),
+  ]));
+
+  // Focus goes to the field, and the heading is announced, so a screen reader
+  // user is told the page changed rather than left on a silent form.
+  announce('Two-factor verification needed. Enter the six-digit code from your authenticator app.',
+    { assertive: true });
+  codeField.control.focus();
+}
+
 function renderSignIn({ message = null } = {}) {
   const emailField = field({
     name: 'email', label: 'Email address', type: 'email', required: true,
@@ -447,15 +570,17 @@ function renderSignIn({ message = null } = {}) {
       await withBusy(submitButton, 'Signing in…', async () => {
         try {
           const result = await api.login(email, password);
-          session.user = result.user;
-          session.organization = result.organization;
-          session.capabilities = result.capabilities;
-          session.actorType = 'user';
 
-          announce(`Signed in as ${result.user.full_name}.`);
-          start();
+          // The password was right but a code is still needed. Rendered as a
+          // second screen rather than a dialog: it is a step in signing in,
+          // not an interruption, and a dialog over an empty page reads as an
+          // error to anyone using a screen reader.
+          if (result.second_factor_required) {
+            renderSecondFactor(result, email);
+            return;
+          }
 
-          if (result.must_change_password) promptPasswordChange();
+          completeSignIn(result);
         } catch (err) {
           const message = err instanceof ApiError ? err.message : 'Could not sign in.';
           errorRegion.append(alertBox(message, { type: 'danger', title: 'Sign-in failed' }));

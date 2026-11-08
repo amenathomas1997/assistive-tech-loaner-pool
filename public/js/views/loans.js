@@ -742,6 +742,97 @@ export async function openAgreementDialog({ loan, required = false, allowWaive =
 // Check-in dialog
 // ---------------------------------------------------------------------------
 
+/**
+ * Ask what came of the trial, once the device is back.
+ *
+ * Skippable by design. The whole value of this data is that it is true, and
+ * an outcome entered to clear a dialog is indistinguishable in the report
+ * from one somebody actually knew.
+ */
+export async function maybeAskForOutcome(loan) {
+  let meta;
+
+  try {
+    meta = await api.outcomeMeta();
+  } catch {
+    return; // Never block a completed return on this.
+  }
+
+  if (!meta.enabled || !meta.prompt_on_checkin || loan.outcome) return;
+
+  const notesField = field({
+    name: 'outcome_notes',
+    label: 'What happened?',
+    type: 'textarea',
+    help: 'A sentence is enough. The next person considering this device for a client reads it.',
+  });
+
+  const error = el('div', { role: 'alert' });
+
+  // Radios rather than a select: there are six, the wording matters, and each
+  // needs its own explanation underneath.
+  const group = el('fieldset', {}, [
+    el('legend', { text: 'How did the trial go?' }),
+    ...meta.outcomes.map((outcome, index) => el('label', { class: 'radio' }, [
+      el('input', {
+        type: 'radio', name: 'trial-outcome', value: outcome.value,
+        id: `trial-outcome-${index}`,
+        'aria-describedby': `trial-outcome-help-${index}`,
+      }),
+      el('span', {}, [
+        outcome.label,
+        el('span', { class: 'option-help', id: `trial-outcome-help-${index}`, text: outcome.help }),
+      ]),
+    ])),
+  ]);
+
+  await modal({
+    title: `How did ${loan.device_name} work out?`,
+    body: el('div', {}, [
+      el('p', { text: meta.notice }),
+      error,
+      group,
+      notesField,
+    ]),
+    actions: [
+      { label: 'I do not know yet', class: 'btn-ghost', value: null },
+      {
+        label: 'Record it',
+        class: 'btn-primary',
+        onClick: async (close) => {
+          const chosen = group.querySelector('input[name="trial-outcome"]:checked');
+
+          if (!chosen) {
+            clear(error).append(alertBox(
+              'Choose an outcome, or close this with "I do not know yet".',
+              { type: 'warn' },
+            ));
+            return;
+          }
+
+          try {
+            await api.recordOutcome(loan.id, {
+              outcome: chosen.value,
+              notes: notesField.control.value.trim() || null,
+            });
+
+            toastOk('Trial outcome recorded.');
+            announce('Trial outcome recorded.');
+            close(true);
+          } catch (err) {
+            if (err.field === 'notes') {
+              notesField.setError(err.message);
+              notesField.control.focus();
+              return;
+            }
+            clear(error).append(alertBox(err.message, { type: 'danger' }));
+          }
+        },
+      },
+    ],
+  });
+}
+
 export async function openCheckinDialog({ device = null, loan = null, onDone = null } = {}) {
   const conditionField = field({
     name: 'condition_in', label: 'Condition coming back', value: 'Good',
@@ -870,6 +961,13 @@ export async function openCheckinDialog({ device = null, loan = null, onDone = n
             }
 
             close(result);
+
+            // Asked after the return is safely recorded, never before: the
+            // device is back whatever the answer, and a dialog that blocked
+            // the return on a question nobody can answer yet would simply
+            // train people to pick something at random.
+            if (result.loan?.id) await maybeAskForOutcome(result.loan);
+
             onDone?.(result);
           } catch (err) {
             toastError(err.message);

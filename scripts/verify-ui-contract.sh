@@ -250,6 +250,29 @@ contract "POST scan/join/{code} -> scanner.js" \
   device delivered_to_station message
 api DELETE "/api/v1/scan/channels/$CHAN_ID" > /dev/null
 
+# --- the third wave -------------------------------------------------------
+contract "outcomes/meta -> loans.js check-in prompt" \
+  "$(api GET /api/v1/outcomes/meta)" outcomes enabled prompt_on_checkin notice
+
+contract "admin/backup -> admin.js backupSection()" \
+  "$(api GET /api/v1/admin/backup)" approximate_size table_count warning last_backup
+
+contract "admin/retention -> admin.js retentionSection()" \
+  "$(api GET /api/v1/admin/retention)" notice policy policy.describes policy.never_touched \
+  policy.enabled clients clients.count
+
+contract "auth/2fa -> admin.js twoFactorSection()" \
+  "$(api GET /api/v1/auth/2fa)" enabled confirmed_at recovery_codes_remaining \
+  required_for_you notice
+
+TFA=$(api POST /api/v1/auth/2fa/begin '{}')
+contract "auth/2fa/begin -> admin.js enrolTwoFactor()" \
+  "$TFA" qr_svg secret secret_formatted steps notice
+
+contract "hygiene/queue -> workshop" "$(api GET /api/v1/hygiene/queue)" rows total blocking notice
+contract "sites -> workshop" "$(api GET /api/v1/sites)" data meta
+contract "transfers -> workshop" "$(api GET /api/v1/transfers)" data meta
+
 rm -f "$JAR"
 
 echo

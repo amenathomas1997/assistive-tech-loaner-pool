@@ -152,6 +152,31 @@ the versioned path: it is the one that will not change under you.
 
 ---
 
+## Trial outcomes
+
+The feature this exists for. Every other part records that a device went out
+and came back; this records whether it **worked** for the person who borrowed
+it, which is the question the loan was asked to answer.
+
+At check-in — skippably — the technician picks one of: worked, recommend
+purchasing; not suitable; right device, needs training first; moving on to a
+different device; client decided against it; not enough use to say.
+
+That turns loan records into the two things an agency cannot otherwise
+produce:
+
+- **Which devices succeed after trial.** The purchasing guide, by category and
+  by model.
+- **How many purchases the trials prevented.** The number that justifies the
+  pool's budget to whoever funds it.
+
+It is deliberately optional, and the report says so. An outcome guessed at the
+counter by somebody who does not know is worse than a blank, because the
+report cannot tell the two apart — so every percentage states its own coverage
+and excludes what it does not have.
+
+---
+
 ## Staying up to date
 
 ```bash
@@ -238,7 +263,7 @@ light and dark schemes and in Windows High Contrast Mode.
 ```
 
 Drops and recreates the test database, runs the web installer through its own
-API, then exercises the application end to end — 257 checks covering
+API, then exercises the application end to end — 362 checks covering
 authentication, RBAC, spreadsheet import, barcode encoding, the loan
 lifecycle, the request workflow, kits and accessories, agreements and
 signatures, condition photos, the waitlist, repairs, funding reporting, bulk
@@ -309,7 +334,15 @@ app/                    Application code, above the document root
   Attachments.php       Condition photos and signature images
   Reports.php           Usage, demand, idle stock and funding analytics
   Jobs.php              Scheduled reminders and housekeeping
-  Updates.php           Update checking against GitHub
+  Updates.php           Update checking and installation
+  Outcomes.php          What came of each trial, and the reports built on it
+  ClientImport.php      Spreadsheet import for clients
+  Hygiene.php           Cleaning records for shared equipment
+  Sites.php             Regional offices and transfers between them
+  Sms.php               Text messages through Twilio
+  Backup.php            Database export, in PHP, needing no mysqldump
+  Retention.php         Anonymising client records on a policy
+  Totp.php              Two-factor codes (RFC 6238) and recovery codes
   Scan.php              Barcode lookup and phone pairing
   Notifications.php     What to say and who should hear it
   Mailer.php            Microsoft Graph client

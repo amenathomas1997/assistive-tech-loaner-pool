@@ -110,6 +110,54 @@ export const api = {
   logout: () => request('POST', '/auth/logout'),
   me: () => request('GET', '/auth/me'),
   changePassword: (body) => request('POST', '/auth/change-password', { body }),
+  verifySecondFactor: (pendingId, code) =>
+    request('POST', '/auth/login/verify', { body: { pending_id: pendingId, code } }),
+
+  // --- Two-factor, for your own account ------------------------------------
+  twoFactor: () => request('GET', '/auth/2fa'),
+  beginTwoFactor: () => request('POST', '/auth/2fa/begin', { body: {} }),
+  confirmTwoFactor: (code) => request('POST', '/auth/2fa/confirm', { body: { code } }),
+  disableTwoFactor: (password) => request('POST', '/auth/2fa/disable', { body: { password } }),
+  regenerateRecoveryCodes: (password) =>
+    request('POST', '/auth/2fa/recovery-codes', { body: { password } }),
+
+  // --- Outcomes -------------------------------------------------------------
+  outcomeMeta: () => request('GET', '/outcomes/meta'),
+  outstandingOutcomes: (query) => request('GET', '/outcomes/outstanding', { query }),
+  recordOutcome: (loanId, body) => request('POST', `/loans/${loanId}/outcome`, { body }),
+  outcomesReport: (query) => request('GET', '/reports/outcomes', { query }),
+  clientOutcomes: (clientId) => request('GET', `/clients/${clientId}/outcomes`),
+
+  // --- Client import --------------------------------------------------------
+  clientImportPreview: (body) => request('POST', '/clients/import/preview', { body }),
+  importClients: (body) => request('POST', '/clients/import', { body }),
+
+  // --- Hygiene --------------------------------------------------------------
+  cleaningQueue: () => request('GET', '/hygiene/queue'),
+  recordCleaning: (deviceId, body) => request('POST', `/devices/${deviceId}/cleaned`, { body }),
+  cleaningHistory: (deviceId) => request('GET', `/devices/${deviceId}/cleaning`),
+  hygieneReport: (query) => request('GET', '/reports/hygiene', { query }),
+
+  // --- Disposal -------------------------------------------------------------
+  disposeDevice: (deviceId, body) => request('POST', `/devices/${deviceId}/dispose`, { body }),
+  disposalReport: (query) => request('GET', '/reports/disposals', { query }),
+
+  // --- Sites and transfers --------------------------------------------------
+  sites: (query) => request('GET', '/sites', { query }),
+  createSite: (body) => request('POST', '/sites', { body }),
+  updateSite: (id, body) => request('PATCH', `/sites/${id}`, { body }),
+  transfers: (query) => request('GET', '/transfers', { query }),
+  sendTransfer: (body) => request('POST', '/transfers', { body }),
+  receiveTransfer: (id, body) => request('POST', `/transfers/${id}/receive`, { body }),
+  cancelTransfer: (id, body) => request('POST', `/transfers/${id}/cancel`, { body }),
+
+  // --- Shipping -------------------------------------------------------------
+  updateShipping: (loanId, body) => request('PATCH', `/loans/${loanId}/shipping`, { body }),
+
+  // --- Backups and retention ------------------------------------------------
+  backupSummary: () => request('GET', '/admin/backup'),
+  retentionPreview: () => request('GET', '/admin/retention'),
+  purgeRetention: (password) => request('POST', '/admin/retention/purge', { body: { password } }),
 
   // --- Devices ------------------------------------------------------------
   devices: (query) => request('GET', '/devices', { query }),
