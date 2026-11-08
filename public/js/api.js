@@ -172,6 +172,7 @@ export const api = {
   emailLog: () => request('GET', '/admin/settings/email-log'),
   updates: () => request('GET', '/admin/updates'),
   checkUpdates: () => request('POST', '/admin/updates/check'),
+  applyUpdate: (password) => request('POST', '/admin/updates/apply', { body: { password } }),
   apiKeys: () => request('GET', '/admin/api-keys'),
   createApiKey: (body) => request('POST', '/admin/api-keys', { body }),
   revokeApiKey: (id) => request('DELETE', `/admin/api-keys/${id}`),

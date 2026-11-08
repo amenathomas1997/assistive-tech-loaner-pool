@@ -115,6 +115,50 @@ try {
 
     // --- Installed -----------------------------------------------------------
 
+    // --- Maintenance window --------------------------------------------------
+    // Held only while an update is physically replacing files. PHP loads
+    // classes one file at a time, so a request arriving mid-swap could execute
+    // a new class against an old one. A few seconds of honest 503 beats that.
+    //
+    // The lock expires on its own (see Updates::LOCK_SECONDS), so an update
+    // that crashes halfway cannot leave the site unreachable with no way back
+    // in through the interface. /health stays up throughout, above.
+    if (Updates::isLocked()) {
+        $details = Updates::lockDetails();
+
+        header('Retry-After: 30');
+
+        if (str_starts_with($request->path, '/api/')) {
+            Response::error(
+                503,
+                'updating',
+                'The software is being updated right now. This takes under a minute — try again shortly.',
+                ['started_at' => $details['started_at'] ?? null, 'by' => $details['by'] ?? null],
+            );
+        }
+
+        http_response_code(503);
+        header('Content-Type: text/html; charset=utf-8');
+        header('Cache-Control: no-store');
+        echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            . '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            . '<meta http-equiv="refresh" content="15">'
+            . '<title>Updating — Loaner Pool</title><style>'
+            . 'body{font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1a2230;'
+            . 'background:#f4f6f9;margin:0;display:grid;place-items:center;min-height:100vh;padding:24px}'
+            . 'main{max-width:34rem;background:#fff;border:1px solid #d8dee8;border-radius:12px;padding:32px}'
+            . 'h1{font-size:1.4rem;margin:0 0 12px}p{margin:0 0 12px}'
+            . '@media (prefers-color-scheme:dark){body{background:#11151c;color:#e8edf5}'
+            . 'main{background:#1a212b;border-color:#2c3542}}'
+            . '</style></head><body><main role="status">'
+            . '<h1>The loaner pool is being updated</h1>'
+            . '<p>This usually takes well under a minute. Nothing has been lost — devices, loans and '
+            . 'photos are untouched.</p>'
+            . '<p>This page checks again every 15 seconds.</p>'
+            . '</main></body></html>';
+        exit;
+    }
+
     // The installer closes itself permanently once setup succeeds. Leaving it
     // reachable is a standing offer to repoint a live system at someone else's
     // database.

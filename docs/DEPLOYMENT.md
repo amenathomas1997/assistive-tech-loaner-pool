@@ -304,9 +304,15 @@ before running it; the updater does not.
 If you cloned and the checkout has local edits, it refuses and tells you rather
 than overwriting them.
 
-Applying is deliberately not possible from the browser. A web page that could
-pull code and change the schema is a way into the server the day its
-credentials leak.
+You can also do it from **Settings → Software updates**, which is the easier
+path if you have no shell access. It asks for your password again before it
+starts — not because the session is untrusted, but because this replaces the
+code the server runs, and an open session on an unattended machine should not
+be enough by itself.
+
+While the files are being swapped the site shows a short maintenance page and
+the API returns 503. It normally lasts a few seconds. `/health` keeps
+answering, so any uptime monitor you have will not page you about it.
 
 ### Manually
 

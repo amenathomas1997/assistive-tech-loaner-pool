@@ -38,6 +38,14 @@ final class Updates
      */
     private const TIMEOUT_SECONDS = 8;
 
+    /**
+     * How long an update may hold the site in maintenance before the lock is
+     * treated as abandoned. Generous — a slow shared host downloading and
+     * unpacking a few megabytes is not a stuck update — but finite, because a
+     * crashed update must not leave the site returning 503 forever.
+     */
+    private const LOCK_SECONDS = 600;
+
     private static function cachePath(): string
     {
         return Config::dataDir() . '/update-check.json';
@@ -57,6 +65,85 @@ final class Updates
     private static function stampPath(): string
     {
         return Config::dataDir() . '/version.json';
+    }
+
+    /**
+     * Held while files are being swapped.
+     *
+     * Two things depend on it. Nothing else may start an update at the same
+     * time — two processes copying over the same tree would interleave into a
+     * mixture of both versions. And the front controller returns 503 while it
+     * exists, so no request executes a half-replaced application: PHP loads
+     * classes one file at a time, so a request landing mid-swap could run a new
+     * Loans.php against an old Util.php.
+     */
+    public static function lockPath(): string
+    {
+        return Config::dataDir() . '/updating.lock';
+    }
+
+    /**
+     * Is an update in progress?
+     *
+     * A lock older than the window is ignored. An update that died halfway —
+     * the process killed, PHP timing out — must not leave the site returning
+     * 503 forever with no way back in through the interface.
+     */
+    public static function isLocked(): bool
+    {
+        $path = self::lockPath();
+
+        if (!is_file($path)) {
+            return false;
+        }
+
+        if (time() - (int) @filemtime($path) > self::LOCK_SECONDS) {
+            @unlink($path);
+            return false;
+        }
+
+        return true;
+    }
+
+    /** @return array{by: ?string, started_at: ?string}|null */
+    public static function lockDetails(): ?array
+    {
+        if (!self::isLocked()) {
+            return null;
+        }
+
+        $raw = json_decode((string) @file_get_contents(self::lockPath()), true);
+
+        return is_array($raw) ? $raw : ['by' => null, 'started_at' => null];
+    }
+
+    private static function acquireLock(?string $by): void
+    {
+        if (self::isLocked()) {
+            $details = self::lockDetails();
+
+            throw new \RuntimeException(sprintf(
+                'An update is already running%s. Wait for it to finish before starting another.',
+                !empty($details['by']) ? ' (started by ' . $details['by'] . ')' : '',
+            ));
+        }
+
+        // x mode: fails rather than truncating if another process won the race
+        // between isLocked() and here.
+        $handle = @fopen(self::lockPath(), 'x');
+
+        if ($handle === false) {
+            throw new \RuntimeException('Another update started a moment ago. Try again shortly.');
+        }
+
+        fwrite($handle, json_encode(['by' => $by, 'started_at' => date('c')]));
+        fclose($handle);
+        @chmod(self::lockPath(), 0600);
+    }
+
+    private static function releaseLock(): void
+    {
+        @unlink(self::lockPath());
     }
 
     private static function readStamp(): ?array
@@ -384,10 +471,25 @@ final class Updates
      */
     public static function apply(array $options = []): array
     {
-        if (PHP_SAPI !== 'cli') {
+        // The web path reaches this through applyFromWeb(), which does the
+        // authorisation first. Anything else must be a console.
+        if (PHP_SAPI !== 'cli' && empty($options['allowWeb'])) {
             throw new \RuntimeException('Updates can only be applied from the command line.');
         }
 
+        self::acquireLock($options['by'] ?? 'the command line');
+
+        try {
+            return self::applyLocked($options);
+        } finally {
+            // Always released, including on failure: a crashed update must not
+            // leave the site in maintenance.
+            self::releaseLock();
+        }
+    }
+
+    private static function applyLocked(array $options): array
+    {
         $local = self::local();
         $log   = [];
 
@@ -450,6 +552,92 @@ final class Updates
             'changed' => $before !== $after,
             'log'     => $log,
         ];
+    }
+
+    /**
+     * Apply an update from the browser.
+     *
+     * This exists because an administrator on shared hosting often has no
+     * shell, and telling them to use one means they never update at all — an
+     * application that is never patched is a worse risk than this endpoint.
+     *
+     * It is not simply the CLI path exposed over HTTP. Updating replaces the
+     * code the server runs, so it is gated harder than anything else here:
+     *
+     *   - an administrator, by role, never an API key;
+     *   - their password, re-entered, so a stolen session cookie or an XSS
+     *     hole is not enough on its own;
+     *   - one at a time, and the site returns 503 while files are swapped;
+     *   - a backup first, with no option to skip it from the web;
+     *   - recorded in the audit log with who, from what, to what.
+     */
+    public static function applyFromWeb(array $auth, ?string $password): array
+    {
+        if (($auth['actorType'] ?? '') !== 'user') {
+            throw Util::forbidden(
+                'Updating the software needs a signed-in administrator. An API key cannot do it, '
+                . 'because a key that can replace the application is a key that can do anything.',
+            );
+        }
+
+        if (($auth['role'] ?? '') !== 'admin') {
+            throw Util::forbidden('Only an administrator can update the software.');
+        }
+
+        if (!is_string($password) || $password === '') {
+            throw Util::badRequest(
+                'Enter your password to confirm. Updating replaces the code this server runs, so it '
+                . 'asks again rather than trusting the open session.',
+                ['field' => 'password'],
+            );
+        }
+
+        $user = Db::one(
+            'SELECT id, password_hash, full_name FROM users WHERE id = ? AND organization_id = ?',
+            [$auth['userId'], $auth['organizationId']],
+        );
+
+        if ($user === null || !Auth::verifyPassword($password, $user['password_hash'])) {
+            // Logged, because repeated failures here are worth noticing.
+            Audit::record($auth, [
+                'action'     => Audit::LOGIN_FAILED,
+                'entityType' => 'update',
+                'summary'    => 'Failed password confirmation on a software update',
+            ]);
+
+            throw Util::badRequest('That password is not correct.', ['field' => 'password']);
+        }
+
+        $before = self::local();
+
+        // Downloading and unpacking on a slow shared host takes longer than a
+        // default web request is allowed. Nothing else in this application
+        // raises the limit.
+        @set_time_limit(600);
+        @ignore_user_abort(true);
+
+        $result = self::apply([
+            'allowWeb' => true,
+            'by'       => $user['full_name'],
+        ]);
+
+        Audit::record($auth, [
+            'action'      => Audit::SETTINGS_UPDATED,
+            'entityType'  => 'update',
+            'entityLabel' => $result['to'],
+            'summary'     => $result['changed']
+                ? sprintf('Software updated from %s to %s by %s',
+                    $result['from'], $result['to'], $user['full_name'])
+                : 'Software update run; already on the latest version',
+            'detail'      => [
+                'from'           => $before['commit'] ?? null,
+                'to'             => $result['to'],
+                'install_method' => $before['install_method'],
+                'log'            => $result['log'],
+            ],
+        ]);
+
+        return $result;
     }
 
     /**
@@ -521,7 +709,10 @@ final class Updates
             $log[] = 'Downloaded and verified the new version.';
 
             // 4. Back up what is about to be overwritten.
-            if (empty($options['skipBackup'])) {
+            // skipBackup is a console-only courtesy. From the browser there is
+            // no way to turn it off: the person pressing the button is the one
+            // least able to recover without it.
+            if (empty($options['skipBackup']) || !empty($options['allowWeb'])) {
                 $backup = self::backup($root, $log);
                 $log[]  = 'Backup written to ' . $backup;
             } else {

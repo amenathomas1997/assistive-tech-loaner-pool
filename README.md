@@ -180,9 +180,24 @@ application gets deployed:
 `data/` is never touched either way: your configuration, uploaded photos and
 signatures stay exactly where they are.
 
-Applying is command-line only on purpose. A web page that could pull code and
-change the schema would be a way in the day its credentials leaked, and this is
-software for agencies who would not spot that happening.
+**Settings → Software updates** can also install it, because an administrator
+on shared hosting often has no shell — and an application that is never patched
+is a worse risk than the button. It is gated harder than anything else in this
+codebase:
+
+- an administrator by role, never an API key, whatever its scope;
+- their password re-entered, so a stolen session cookie or an XSS hole is not
+  enough on its own;
+- one update at a time, with the site returning a 503 maintenance page for the
+  few seconds files are actually being swapped — PHP loads classes one file at
+  a time, so a request arriving mid-swap could otherwise run a new class
+  against an old one;
+- `/health` stays up throughout, so monitoring is not blinded;
+- a backup taken first, with no way to skip it from the browser;
+- the attempt recorded in the audit log, success or failure.
+
+The maintenance lock expires on its own, so an update that dies halfway cannot
+leave the site unreachable with no way back in through the interface.
 
 `--quiet` prints only when there is something to say, so
 `php bin/update.php --quiet` suits a weekly cron entry. `--no-backup` skips the

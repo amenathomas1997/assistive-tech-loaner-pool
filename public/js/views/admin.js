@@ -458,29 +458,119 @@ function updatesSection(readOnly) {
           )
         : null,
 
-      how
-        ? el('div', {}, [
-            el('h3', { text: 'How to update' }),
-            el('ol', {}, how.steps.map((step) => el('li', { text: step }))),
-            how.command
-              ? el('div', {}, [
-                  el('p', { class: 'label', text: 'Run this on the server' }),
-                  el('p', { class: 'mono key-reveal', text: how.command }),
-                ])
-              : null,
-            how.notice ? el('p', { class: 'field-help', text: how.notice }) : null,
-            el('p', { class: 'field-help' },
-              'Updates are applied from the command line on purpose. A web page that could pull code ' +
-              'and change the database would be a way in if its credentials ever leaked.'),
-          ])
-        : null,
+      el('div', { class: 'btn-group', style: { marginTop: '14px' } }, [
+        can('settings.write')
+          ? el('button', {
+              type: 'button', class: 'btn btn-primary', disabled: readOnly,
+              onClick: () => installUpdate(result, render),
+            }, 'Install this update')
+          : null,
+        result.latest && result.latest.url
+          ? el('a', { class: 'btn', href: result.latest.url, target: '_blank', rel: 'noopener' },
+              'See what changed')
+          : null,
+      ]),
 
-      result.latest && result.latest.url
-        ? el('a', { class: 'btn', href: result.latest.url, target: '_blank', rel: 'noopener' },
-            'See what changed')
+      how && how.command
+        ? el('details', { style: { marginTop: '14px' } }, [
+            el('summary', { text: 'Prefer to do it from the command line?' }),
+            el('p', { class: 'label', style: { marginTop: '10px' }, text: 'Run this on the server' }),
+            el('p', { class: 'mono key-reveal', text: how.command }),
+            how.notice ? el('p', { class: 'field-help', text: how.notice }) : null,
+          ])
         : null,
     );
   };
+
+  /**
+   * Install an update from the browser.
+   *
+   * The password is asked for again on purpose. This replaces the code the
+   * server runs, so an open session left on an unattended machine should not
+   * be enough by itself.
+   */
+  async function installUpdate(result, rerender) {
+    const passwordField = field({
+      name: 'password', label: 'Your password', type: 'password', required: true,
+      autocomplete: 'current-password',
+      help: 'Confirming that it is really you. Updating replaces the application code.',
+    });
+
+    const progress = el('div', { role: 'status', 'aria-live': 'polite' });
+
+    await modal({
+      title: 'Install this update',
+      body: el('div', {}, [
+        el('p', { text: result.summary }),
+        el('ul', {}, [
+          el('li', { text: 'Your devices, loans, clients and photos are not touched.' }),
+          el('li', { text: 'A backup of the current files is saved first.' }),
+          el('li', { text: 'The site is unavailable for a few seconds while the files are replaced.' }),
+          el('li', { text: 'Any database changes the new version needs are applied automatically.' }),
+        ]),
+        el('p', { class: 'field-help' },
+          'Back up your database before doing this. The updater backs up the files, not the data.'),
+        passwordField,
+        progress,
+      ]),
+      actions: [
+        { label: 'Cancel', class: 'btn-ghost', value: null },
+        {
+          label: 'Install it',
+          class: 'btn-primary',
+          onClick: async (close) => {
+            const password = passwordField.control.value;
+
+            if (!password) {
+              passwordField.setError('Enter your password to confirm.');
+              passwordField.control.focus();
+              return;
+            }
+
+            passwordField.setError(null);
+            clear(progress).append(loadingBlock(
+              'Downloading and installing. This can take a minute — do not close this page.',
+            ));
+            announce('Installing the update. Please wait.', { assertive: true });
+
+            try {
+              const outcome = await api.applyUpdate(password);
+
+              clear(progress).append(
+                alertBox(outcome.message, { type: 'ok', title: 'Update installed' }),
+                el('ul', { class: 'mono', style: { fontSize: '0.85em' } },
+                  (outcome.log || []).map((line) => el('li', { text: line }))),
+              );
+
+              toastOk(outcome.message);
+              announce('The update finished. Reload the page to use the new version.',
+                { assertive: true });
+
+              // The browser is still running the old JavaScript at this point.
+              // Reloading is the honest way to pick up the new interface, and
+              // the delay lets the log above be read first.
+              setTimeout(() => window.location.reload(), 4000);
+            } catch (err) {
+              clear(progress);
+
+              if (err.field === 'password') {
+                passwordField.setError(err.message);
+                passwordField.control.focus();
+                return;
+              }
+
+              progress.append(alertBox(err.message, { type: 'danger', title: 'The update did not run' }));
+              announce(`The update did not run. ${err.message}`, { assertive: true });
+            }
+          },
+        },
+      ],
+    });
+
+    try {
+      rerender(await api.updates());
+    } catch { /* The panel will refresh on the reload. */ }
+  }
 
   checkButton.addEventListener('click', async () => {
     await withBusy(checkButton, 'Checking…', async () => {
@@ -506,8 +596,8 @@ function updatesSection(readOnly) {
     el('p', {
       class: 'muted',
       text:
-        'This checks github.com for a newer version. It never installs anything on its own, and it ' +
-        'sends nothing about this installation — only a request for the latest version number.',
+        'This checks github.com for a newer version. It never installs anything without you asking, ' +
+        'and it sends nothing about this installation — only a request for the latest version number.',
     }),
     body,
   ]);

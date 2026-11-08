@@ -45,6 +45,10 @@ final class AdminRoutes
 
         $router->get('/admin/updates', [self::class, 'updates'], 'settings.read');
         $router->post('/admin/updates/check', [self::class, 'checkUpdates'], 'settings.write');
+        // Null capability: this one authorises itself. Updating replaces the
+        // running code, so it checks role and re-confirms the password rather
+        // than accepting a capability any session already carries.
+        $router->post('/admin/updates/apply', [self::class, 'applyUpdate']);
 
         $router->get('/admin/api-keys', [self::class, 'apiKeys'], 'apikeys.read');
         $router->post('/admin/api-keys', [self::class, 'createApiKey'], 'apikeys.write');
@@ -568,6 +572,27 @@ final class AdminRoutes
     public static function updates(Request $request): never
     {
         Response::json(Updates::check(false));
+    }
+
+    /**
+     * Install an update from the browser.
+     *
+     * Gated inside Updates::applyFromWeb(): administrator role, password
+     * re-entered, one at a time, backup taken, audit entry written. The site
+     * returns 503 for the few seconds the files are actually being swapped.
+     */
+    public static function applyUpdate(Request $request): never
+    {
+        $auth = Auth::requireAuth($request);
+
+        $result = Updates::applyFromWeb($auth, $request->input('password'));
+
+        Response::json($result + [
+            'message' => $result['changed']
+                ? sprintf('Updated from %s to %s. Reload the page to pick up the new interface.',
+                    $result['from'], $result['to'])
+                : 'Already on the latest version; nothing was changed.',
+        ]);
     }
 
     public static function checkUpdates(Request $request): never

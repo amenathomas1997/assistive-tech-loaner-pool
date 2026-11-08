@@ -420,6 +420,38 @@ check "cannot demote the only administrator" "$OUT" "own administrator role"
 OUT=$(curl -s "$BASE/api/v1/devices")
 check "unauthenticated request is rejected" "$OUT" "unauthorized"
 
+# --- Updating the software from the browser -------------------------------
+# This endpoint replaces the code the server runs, so its gates are asserted
+# rather than trusted. Each of these is a way in if it ever stops holding.
+
+OUT=$(curl -s -X POST "$BASE/api/v1/admin/updates/apply" \
+      -H 'Content-Type: application/json' -d '{"password":"x"}')
+check "updating is refused without a session" "$OUT" "unauthorized"
+
+OUT=$(api POST /api/v1/admin/updates/apply '{}')
+check "updating demands the password be re-entered" "$OUT" "password"
+
+OUT=$(api POST /api/v1/admin/updates/apply '{"password":"not-the-right-one"}')
+check "updating refuses a wrong password" "$OUT" "not correct"
+
+# An API key must never be able to replace the application, whatever its scope.
+OUT=$(api POST /api/v1/admin/api-keys '{"name":"Update gate probe","scopes":["admin"]}')
+PROBE_KEY=$(printf '%s' "$OUT" | jqv "['key']")
+PROBE_ID=$(printf '%s' "$OUT" | jqv "['api_key']['id']")
+OUT=$(curl -s -X POST "$BASE/api/v1/admin/updates/apply" \
+      -H "Authorization: Bearer $PROBE_KEY" -H 'Content-Type: application/json' \
+      -d '{"password":"correct-horse-battery-7"}')
+check "an admin-scoped API key cannot update the software" "$OUT" "forbidden"
+api DELETE "/api/v1/admin/api-keys/$PROBE_ID" > /dev/null
+
+# And a counselor cannot, even with their own correct password.
+curl -s -b "$JAR" -c "$JAR" -X POST "$BASE/api/v1/auth/logout" > /dev/null
+api POST /api/v1/auth/login '{"email":"vrc@example.org","password":"counsel-Secret-26"}' > /dev/null
+OUT=$(api POST /api/v1/admin/updates/apply '{"password":"counsel-Secret-26"}')
+check "a counselor cannot update the software" "$OUT" "administrator"
+curl -s -b "$JAR" -c "$JAR" -X POST "$BASE/api/v1/auth/logout" > /dev/null
+api POST /api/v1/auth/login '{"email":"admin@example.org","password":"correct-horse-battery-7"}' > /dev/null
+
 OUT=$(curl -s -X POST "$BASE/api/install/run" -H 'Content-Type: application/json' -d '{}')
 check "installer is closed after installation" "$OUT" "already_installed"
 
