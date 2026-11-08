@@ -15,6 +15,7 @@ import {
 import {
   el, clear, $, field, toast, toastError, toastOk, toastWarn, announce, alert as alertBox,
   modal, confirmDialog, withBusy, focusHeading, loadingBlock,
+  messagesAutoDismiss, setMessagesAutoDismiss,
 } from './ui.js';
 
 import { renderDashboard } from './views/dashboard.js';
@@ -524,6 +525,8 @@ function showHelp() {
       // be switchable off. The switch lives here, beside the list it governs,
       // rather than buried in settings.
       shortcutToggle(),
+      messageToggle(),
+      glossary(),
       el('h3', { text: 'Who to contact' }),
       el('p', {
         text: session.organization?.contact_email
@@ -533,6 +536,82 @@ function showHelp() {
     ]),
     actions: [{ label: 'Close', class: 'btn-primary', value: null }],
   });
+}
+
+/**
+ * What the words mean.
+ *
+ * SC 3.1.3 Unusual Words and SC 3.1.4 Abbreviations (both Level AAA) ask for
+ * a mechanism to find the meaning of jargon and the expansion of
+ * abbreviations. A glossary reachable from every screen is that mechanism —
+ * technique G102 — and it is cheaper than wrapping several hundred generated
+ * strings in <abbr>, which would also read badly aloud, since a screen
+ * reader announces the expansion every single time.
+ *
+ * It earns its place twice over: a VR agency hires people who have never seen
+ * half of these words either, and the first week is mostly asking what they
+ * mean.
+ */
+const TERMS = [
+  ['VRC', 'Vocational Rehabilitation Counselor — the person who requests equipment for a client.'],
+  ['AT', 'Assistive technology: the equipment this pool lends.'],
+  ['Client', 'The person the equipment is for.'],
+  ['Program', 'An activity a loan belongs to, such as a summer programme or a training course.'],
+  ['Loan', 'One device out to one person, with a due date.'],
+  ['Kit', 'Several devices that go out and come back together as one loan.'],
+  ['Reservation', 'A hold on a device, or on any device of a category, for a future date.'],
+  ['Waitlist', 'Who is waiting for something that is currently all out.'],
+  ['Outcome', 'What the loan told you: whether the equipment suited the person.'],
+  ['CSV', 'Comma-separated values: a spreadsheet file that Excel and Google Sheets both open.'],
+  ['API', 'Application programming interface: the way another system talks to this one.'],
+  ['API key', 'A password another system uses instead of signing in as a person.'],
+  ['QR code', 'A square barcode. A phone camera can read one.'],
+  ['SMS', 'A text message.'],
+  ['Two-factor', 'A six-digit code from an app, asked for after the password.'],
+  ['Sanitising', 'Cleaning a device between two people, recorded with a date and a method.'],
+];
+
+function glossary() {
+  return el('details', { class: 'glossary' }, [
+    el('summary', { text: 'What the words mean' }),
+    el('dl', { class: 'detail-list' }, TERMS.flatMap(([term, meaning]) => [
+      el('dt', { text: term }),
+      el('dd', { text: meaning }),
+    ])),
+  ]);
+}
+
+/**
+ * Whether confirmations clear themselves.
+ *
+ * SC 2.2.4 Interruptions. Sits beside the shortcut switch rather than in
+ * settings, because somebody who has just watched a message disappear before
+ * they finished reading it will look for the control where they are, which is
+ * the help they already opened — not three screens away.
+ */
+function messageToggle() {
+  const input = el('input', {
+    type: 'checkbox', id: 'messages-autodismiss', checked: messagesAutoDismiss(),
+  });
+
+  input.addEventListener('change', () => {
+    setMessagesAutoDismiss(input.checked);
+    announce(input.checked
+      ? 'Confirmations will clear themselves after a few seconds.'
+      : 'Confirmations will now stay until you dismiss them.');
+  });
+
+  return el('label', { class: 'checkbox', for: 'messages-autodismiss' }, [
+    input,
+    el('span', {}, [
+      'Let confirmations clear themselves',
+      el('span', {
+        class: 'option-help',
+        text: 'Turn this off to keep every message on screen until you close it. '
+            + 'Errors already stay put either way. Remembered on this browser.',
+      }),
+    ]),
+  ]);
 }
 
 /** The on/off switch for the single-key shortcuts. */
@@ -985,11 +1064,134 @@ function start() {
   refreshBadges();
 }
 
-onSessionExpired(() => {
-  if (!session.user) return;
+/**
+ * Sign back in without losing the screen.
+ *
+ * SC 2.2.5 Re-authenticating (Level AAA): when an authenticated session
+ * expires, the person must be able to carry on after signing in again
+ * without losing what they had done. This used to replace the whole page
+ * with the sign-in form, which threw away a half-filled request form or a
+ * check-out in progress — and the people most likely to hit it are the ones
+ * who take longest over a form.
+ *
+ * So the page stays where it is and the sign-in comes over the top. A
+ * <dialog> is modal and inert-makes the background, so nothing behind it can
+ * be touched while it is open, but it is all still there afterwards.
+ *
+ * Falls back to the full sign-in screen where carrying on is not possible:
+ * if a second factor is needed, if the account is being made to change its
+ * password, or if the person would rather start again.
+ */
+let reauthOpen = false;
+
+async function promptReauthentication() {
+  // Every request in flight gets a 401 when a session goes, so this fires
+  // several times over. One dialog.
+  if (reauthOpen) return;
+
+  const email = session.user?.email;
+
+  if (!email) {
+    signOutToSignIn('Your session has expired. Please sign in again.');
+    return;
+  }
+
+  reauthOpen = true;
+
+  const passwordField = field({
+    name: 'password', label: 'Password', type: 'password', required: true,
+    autocomplete: 'current-password',
+  });
+  const errorRegion = el('div', { role: 'alert' });
+
+  const signedBackIn = await modal({
+    title: 'Your session has expired',
+    body: el('div', { class: 'stack' }, [
+      el('p', {
+        text: `Signing in again as ${email}. Nothing on the screen behind this has been lost — `
+            + 'you will be back where you were.',
+      }),
+      errorRegion,
+      // A form, so Enter submits and a password manager recognises it.
+      el('form', {
+        novalidate: true,
+        onSubmit: (event) => event.preventDefault(),
+      }, [passwordField]),
+    ]),
+    actions: [
+      {
+        label: 'Start again',
+        class: 'btn-ghost',
+        onClick: (close) => close(false),
+      },
+      {
+        label: 'Sign in',
+        class: 'btn-primary',
+        onClick: async (close, dialog) => {
+          const password = passwordField.control.value;
+
+          if (!password) {
+            passwordField.setError('Enter your password.');
+            passwordField.control.focus();
+            return;
+          }
+
+          const button = dialog.querySelector('.modal-footer .btn-primary');
+
+          await withBusy(button, 'Signing in…', async () => {
+            try {
+              const result = await api.login(email, password);
+
+              // Both of these need the full screen: one is another step, the
+              // other is a form that must be completed before anything else.
+              if (result.second_factor_required || result.must_change_password) {
+                close(false);
+                return;
+              }
+
+              session.user = result.user;
+              session.organization = result.organization;
+              session.capabilities = result.capabilities;
+              session.actorType = 'user';
+
+              close(true);
+            } catch (err) {
+              clear(errorRegion);
+              const message = err instanceof ApiError ? err.message : 'Could not sign in.';
+              errorRegion.append(alertBox(message, { type: 'danger', title: 'Sign-in failed' }));
+              announce(`Sign-in failed. ${message}`, { assertive: true });
+              passwordField.control.value = '';
+              passwordField.control.focus();
+            }
+          });
+        },
+      },
+    ],
+  });
+
+  reauthOpen = false;
+
+  if (signedBackIn === true) {
+    announce('Signed back in. You are where you were.');
+    toastOk('You are signed back in.');
+    renderNav();
+    refreshBadges();
+    return;
+  }
+
+  signOutToSignIn('Your session has expired. Please sign in again.');
+}
+
+function signOutToSignIn(message) {
   session.user = null;
   session.capabilities = [];
-  renderSignIn({ message: 'Your session has expired. Please sign in again.' });
+  renderSignIn({ message });
+}
+
+onSessionExpired(() => {
+  // Already signed out, or never signed in: nothing to re-authenticate.
+  if (!session.user) return;
+  promptReauthentication();
 });
 
 window.addEventListener('hashchange', handleRoute);

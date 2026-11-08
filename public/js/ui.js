@@ -114,10 +114,42 @@ function ensureToastRegion() {
 }
 
 /**
+ * How long a message waits before it clears itself.
+ *
+ * SC 2.2.4 Interruptions (Level AAA) asks that interruptions can be postponed
+ * or suppressed. A message appearing on a timer and leaving on a timer is an
+ * interruption, and the people most affected are the ones this application is
+ * for: somebody reading with a magnifier may still be two words into a
+ * message when it disappears, and somebody using a screen reader may be
+ * hearing something else entirely when it arrives and goes.
+ *
+ * So the timer is a preference rather than a constant. Off means every
+ * message waits to be dismissed; on is the default because for most people a
+ * confirmation that lingers is clutter.
+ */
+const MESSAGE_TIMEOUT_KEY = 'loanerpool.messages.autodismiss';
+const DEFAULT_TIMEOUT_MS = 5200;
+
+export function messagesAutoDismiss() {
+  try {
+    return window.localStorage.getItem(MESSAGE_TIMEOUT_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+
+export function setMessagesAutoDismiss(on) {
+  try {
+    window.localStorage.setItem(MESSAGE_TIMEOUT_KEY, on ? 'on' : 'off');
+  } catch { /* The preference simply will not persist. */ }
+}
+
+/**
  * Show a transient message.
  *
  * Errors do not auto-dismiss: WCAG 2.2 SC 2.2.1 aside, a message that vanishes
- * before it is read is worse than no message. Successes clear themselves.
+ * before it is read is worse than no message. Successes clear themselves,
+ * unless the reader has asked them not to.
  */
 export function toast(message, { type = 'info', title = null, timeout = null } = {}) {
   const region = ensureToastRegion();
@@ -140,7 +172,9 @@ export function toast(message, { type = 'info', title = null, timeout = null } =
   region.append(node);
   announce(title ? `${title}. ${message}` : message, { assertive: type === 'danger' });
 
-  const life = timeout ?? (type === 'danger' ? null : 5200);
+  const life = timeout ?? (
+    type === 'danger' || !messagesAutoDismiss() ? null : DEFAULT_TIMEOUT_MS
+  );
   if (life) setTimeout(() => node.remove(), life);
 
   return node;

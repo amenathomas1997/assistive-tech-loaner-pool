@@ -109,7 +109,12 @@ function overdueCard(loans) {
   return el('section', { class: 'card', 'aria-labelledby': 'overdue-heading' }, [
     el('div', { class: 'card-header' }, [
       el('h2', { id: 'overdue-heading', text: 'Overdue loans' }),
-      loans.length ? el('a', { class: 'btn btn-sm', href: '#/loans?status=overdue' }, 'See all') : null,
+      // SC 2.4.9 Link Purpose (Link Only): "See all" tells somebody reading a
+      // list of links nothing about where any of them goes, and a dashboard
+      // has three of them.
+      loans.length
+        ? el('a', { class: 'btn btn-sm', href: '#/loans?status=overdue' }, 'See all overdue loans')
+        : null,
     ]),
     loans.length
       ? dataTable({
@@ -142,7 +147,9 @@ function dueSoonCard(loans) {
   return el('section', { class: 'card', 'aria-labelledby': 'duesoon-heading' }, [
     el('div', { class: 'card-header' }, [
       el('h2', { id: 'duesoon-heading', text: 'Due back soon' }),
-      loans.length ? el('a', { class: 'btn btn-sm', href: '#/loans?status=due_soon' }, 'See all') : null,
+      loans.length
+        ? el('a', { class: 'btn btn-sm', href: '#/loans?status=due_soon' }, 'See all due back soon')
+        : null,
     ]),
     loans.length
       ? dataTable({
@@ -168,7 +175,7 @@ function requestsCard(requests) {
   return el('section', { class: 'card', 'aria-labelledby': 'requests-heading' }, [
     el('div', { class: 'card-header' }, [
       el('h2', { id: 'requests-heading', text: 'Open loan requests' }),
-      el('a', { class: 'btn btn-sm', href: '#/requests' }, 'See all'),
+      el('a', { class: 'btn btn-sm', href: '#/requests' }, 'See all loan requests'),
     ]),
     requests.length
       ? dataTable({

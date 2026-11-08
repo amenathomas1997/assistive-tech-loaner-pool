@@ -731,6 +731,19 @@ legend { font-weight: 660; padding: 0 7px; font-size: 0.92rem; }
 
 .form-grid { display: grid; gap: 0 16px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
 
+/* The glossary in the help dialog. Collapsed, because most people opening
+   help want the shortcut list, and the summary row is a 44px target. */
+.glossary > summary {
+  cursor: pointer;
+  font-weight: 650;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 6px 0;
+}
+.glossary > summary:focus-visible { outline: 3px solid var(--border-focus); outline-offset: 2px; }
+.glossary dt { font-weight: 650; }
+
 /* --- Keyboard navigation ------------------------------------------------- */
 
 /* Several skip links rather than one: a keyboard user arriving mid-task most
