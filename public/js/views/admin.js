@@ -452,9 +452,20 @@ function updatesSection(readOnly) {
 
       local.has_local_changes === true
         ? alertBox(
-            'This checkout has uncommitted local changes. Review them before updating, or they will ' +
-            'conflict with the update.',
+            'Tracked files on the server have been edited. Updating would overwrite those edits, so ' +
+            'review them first.',
             { type: 'warn', title: 'Local changes on the server' },
+          )
+        : null,
+
+      // Clutter, not an obstacle: untracked files cannot conflict with an
+      // update and nothing will touch them. Mentioned because a stray copy of
+      // the application sitting beside it is worth knowing about.
+      (local.untracked_files || []).length
+        ? alertBox(
+            `Files here are not part of the application: ${local.untracked_files.join(', ')}. ` +
+            'They do not affect the update and will be left alone, but they can be deleted.',
+            { type: 'info', title: 'Extra files in the folder' },
           )
         : null,
 

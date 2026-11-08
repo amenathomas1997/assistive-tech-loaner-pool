@@ -190,16 +190,29 @@ final class Updates
         $commit   = null;
         $branch   = null;
         $dirty    = null;
+        $strays   = [];
 
         if ($isGit) {
             $commit = self::git($root, 'rev-parse HEAD');
             $branch = self::git($root, 'rev-parse --abbrev-ref HEAD');
 
-            // Local edits matter: pulling over them either conflicts or
-            // silently discards somebody's fix, and they should be told which
-            // before anything is applied.
-            $status = self::git($root, 'status --porcelain');
+            // --untracked-files=no on purpose. Modified TRACKED files are a
+            // real obstacle: updating would overwrite somebody's edit. An
+            // untracked file is not — it cannot conflict with a fast-forward,
+            // and nothing will touch it.
+            //
+            // Counting untracked files here meant a stray directory left
+            // beside the application refused every update with "uncommitted
+            // changes", which is both wrong and impossible to act on: there
+            // was nothing to commit.
+            $status = self::git($root, 'status --porcelain --untracked-files=no');
             $dirty  = $status === null ? null : ($status !== '');
+
+            // Reported, not enforced, so the panel can mention clutter without
+            // it blocking anything.
+            $untracked = self::git($root, 'ls-files --others --exclude-standard --directory');
+            $strays    = ($untracked === null || $untracked === '')
+                ? [] : array_slice(explode("\n", $untracked), 0, 10);
         }
 
         // No git, or git present but unusable (exec disabled): fall back to
@@ -217,6 +230,7 @@ final class Updates
             'commit_short'   => $commit === null ? null : substr($commit, 0, 7),
             'branch'         => $branch,
             'has_local_changes' => $dirty,
+            'untracked_files'   => $strays,
             'root'           => $root,
         ];
     }
@@ -510,16 +524,32 @@ final class Updates
         $before = $local['commit'];
         $log[]  = 'Currently on ' . substr($before, 0, 7) . ' (' . ($local['branch'] ?? 'unknown branch') . ').';
 
-        $pull = self::git($local['root'], 'pull --ff-only');
-
-        if ($pull === null) {
+        // Fetch and merge explicitly rather than `git pull`. Pull needs the
+        // branch to have upstream tracking configured, and a checkout made with
+        // `git init` + `git remote add` + `git reset --hard origin/main` has
+        // none — it sits on a local branch (often "master") that pull refuses
+        // with "there is no tracking information for the current branch".
+        // Naming the remote and branch sidesteps all of that.
+        if (self::git($local['root'], 'fetch origin ' . self::BRANCH) === null) {
             throw new \RuntimeException(
-                'git pull failed. The usual cause is a branch that cannot fast-forward, which means '
-                . 'this checkout has commits of its own. Run "git pull" directly to see why.',
+                'Could not fetch from GitHub. Check that this server has outbound HTTPS access, '
+                . 'and that "git fetch origin ' . self::BRANCH . '" works in ' . $local['root'] . '.',
             );
         }
 
-        $log[] = trim($pull) === 'Already up to date.' ? 'Already up to date.' : 'Pulled the latest code.';
+        $merge = self::git($local['root'], 'merge --ff-only FETCH_HEAD');
+
+        if ($merge === null) {
+            throw new \RuntimeException(
+                'The update could not be applied as a fast-forward, which means this checkout has '
+                . 'commits of its own that are not on GitHub. Run "git status" and "git log" in '
+                . $local['root'] . ' to see what they are.',
+            );
+        }
+
+        $log[] = str_contains($merge, 'Already up to date')
+            ? 'Already up to date.'
+            : 'Fetched and applied the latest code.';
 
         $after = self::git($local['root'], 'rev-parse HEAD');
         $log[] = 'Now on ' . substr((string) $after, 0, 7) . '.';
