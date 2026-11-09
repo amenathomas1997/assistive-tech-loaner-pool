@@ -423,6 +423,13 @@ final class AdminRoutes
         Response::json([
             'settings'    => Settings::forClient($organizationId),
             'groups'      => Settings::GROUPS,
+            // Named here so the settings screen offers exactly what the label
+            // sheet can print, rather than keeping its own copy of the list.
+            'label_stocks' => array_map(
+                static fn (string $key, array $stock): array => ['value' => $key, 'label' => $stock['label']],
+                array_keys(Barcode::LABEL_STOCKS),
+                Barcode::LABEL_STOCKS,
+            ),
             'mail_status' => self::mailStatus($organizationId),
             'sso_status'  => \Loaner\Sso::adminStatus($organizationId, $request),
             'definitions' => array_map(static fn (array $d): array => [

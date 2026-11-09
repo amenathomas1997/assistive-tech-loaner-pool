@@ -323,9 +323,18 @@ final class DeviceRoutes
                 true,
             ),
             'orgName'      => $organization['name'] ?? '',
-            'columns'      => (int) ($request->queryParam('columns') ?? 3),
-            'labelWidthMm' => (float) ($request->queryParam('width') ?? 63.5),
-            'labelHeightMm' => (float) ($request->queryParam('height') ?? 38.1),
+            // The organisation's usual stock unless this sheet asks for another.
+            'stock'        => Util::oneOf(
+                $request->queryParam('stock') ?? Settings::get($organizationId, 'labels.stock'),
+                array_keys(Barcode::LABEL_STOCKS),
+                'stock',
+                true,
+            ),
+            'skip'         => Util::int($request->queryParam('skip') ?? 0, 'skip', 0, 79) ?? 0,
+            'query'        => [
+                'ids'       => $request->queryParam('ids'),
+                'symbology' => $request->queryParam('symbology'),
+            ],
         ]));
     }
 

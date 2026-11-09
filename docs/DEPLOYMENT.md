@@ -191,8 +191,13 @@ Back this file up. Losing it means re-running the installer; losing the
 
 - **Import your inventory** — Devices → Import spreadsheet. Run the test
   import first; it reports exactly what would change without writing anything.
-- **Print labels** — Devices → Print labels. Check one against your scanner
-  before printing hundreds.
+- **Print labels** — Devices → Print labels. Pick your sheet under
+  Settings → Loan policy → "Label sheets in the printer": Avery 5160, 5161 or
+  5163 on US Letter (5160 is the default), or L7160 on A4. In the print dialog
+  choose **Margins: None** and **Scale: 100%**, print one page on plain paper and
+  hold it against a label sheet, and check one label against your scanner
+  before printing hundreds. A part-used sheet can be finished by entering how
+  many labels are already gone.
 - **Add staff** — Staff → Add staff account.
 - **Configure email** — Settings → Email. See below.
 

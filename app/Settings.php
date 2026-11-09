@@ -51,6 +51,8 @@ final class Settings
         'scan.remote_enabled'      => ['boolean', true, 'scanning'],
         'scan.channel_ttl_minutes' => ['integer', 240,  'scanning'],
         'scan.offline_enabled'     => ['boolean', true, 'scanning'],
+        // Which sheet of labels the printer is loaded with. See Barcode::LABEL_STOCKS.
+        'labels.stock'             => ['string', 'avery-5160', 'scanning'],
 
         // --- Loan agreements --------------------------------------------------
         'agreements.enabled'     => ['boolean', false, 'agreements'],
@@ -159,6 +161,13 @@ final class Settings
     {
         if ($value !== null && !is_scalar($value)) {
             throw Util::badRequest("The setting {$key} must be a single value.", ['field' => $key]);
+        }
+
+        if ($key === 'labels.stock' && !array_key_exists((string) $value, Barcode::LABEL_STOCKS)) {
+            throw Util::badRequest(
+                'Choose one of the label sheets listed.',
+                ['field' => $key, 'allowed' => array_keys(Barcode::LABEL_STOCKS)],
+            );
         }
 
         if ($type !== 'integer') {

@@ -596,6 +596,23 @@ eq 'and neither loan was ended by trying'                   "$(api "$ADMIN" GET 
 SEAT_IN="{\"loan_id\":$SEAT_LOAN_B}"
 eq 'naming the loan ends that loan'                         "$(code "$ADMIN" POST /loans/checkin "$SEAT_IN")" 200
 
+# Labels are laid out for real sheets, US Letter by default.
+LABELS=$(curl -s -b "$ADMIN" "$BASE/api/v1/devices/labels?ids=$SEATS")
+case "$LABELS" in *'size: letter'*'grid-template-columns: repeat(3, 66.675mm)'*) pass 'labels default to Avery 5160 on US Letter';;
+  *) fail 'labels default to Avery 5160 on US Letter';; esac
+case "$(curl -s -b "$ADMIN" "$BASE/api/v1/devices/labels?ids=$SEATS&stock=avery-5163&skip=4")" in
+  *'repeat(2, 101.6mm)'*'label blank'*) pass 'another sheet and a part-used one can be chosen';;
+  *) fail 'another sheet and a part-used one can be chosen';; esac
+eq 'an unknown label sheet is refused'                      "$(code "$ADMIN" GET "/devices/labels?ids=$SEATS&stock=nonsense")" 400
+BAD_STOCK='{"settings":{"labels.stock":"nonsense"}}'
+eq 'and cannot be saved as the default'                     "$(code "$ADMIN" PATCH /admin/settings "$BAD_STOCK")" 400
+GOOD_STOCK='{"settings":{"labels.stock":"avery-5163"}}'
+api "$ADMIN" PATCH /admin/settings "$GOOD_STOCK" > /dev/null
+case "$(curl -s -b "$ADMIN" "$BASE/api/v1/devices/labels?ids=$SEATS")" in *'repeat(2, 101.6mm)'*) pass 'the saved default is what prints';;
+  *) fail 'the saved default is what prints';; esac
+DEFAULT_STOCK='{"settings":{"labels.stock":"avery-5160"}}'
+api "$ADMIN" PATCH /admin/settings "$DEFAULT_STOCK" > /dev/null
+
 # A list where one value belongs is a bad request, not a crash.
 while IFS='|' read -r method path body; do
   got=$(code "$ADMIN" "$method" "$path" "$body")

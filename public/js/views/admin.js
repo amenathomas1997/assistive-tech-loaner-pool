@@ -307,6 +307,13 @@ export async function renderSettings() {
     type: 'checkbox', id: 'scan-offline', checked: Boolean(settings['scan.offline_enabled']), disabled: readOnly,
   });
 
+  const labelStock = field({
+    name: 'labels.stock', label: 'Label sheets in the printer', type: 'select',
+    value: settings['labels.stock'], disabled: readOnly,
+    options: (settingsResponse.label_stocks || []).map((s) => ({ value: s.value, label: s.label })),
+    help: 'What "Print labels" lays out for. A different sheet can still be chosen on the label page itself.',
+  });
+
   const policyButton = el('button', { type: 'submit', class: 'btn btn-primary', disabled: readOnly }, 'Save policy');
 
   const policyForm = el('form', {
@@ -318,6 +325,7 @@ export async function renderSettings() {
           'loans.max_per_client': Number(maxPerClient.control.value),
           'scan.remote_enabled': remoteScan.checked,
           'scan.offline_enabled': offlineScan.checked,
+          'labels.stock': labelStock.control.value,
         };
         for (const [key, box] of Object.entries(policyBoxes)) updates[key] = box.checked;
 
@@ -353,6 +361,7 @@ export async function renderSettings() {
           + 'Check-outs are never held.'),
       ]),
     ]),
+    labelStock,
     policyButton,
   ]);
 

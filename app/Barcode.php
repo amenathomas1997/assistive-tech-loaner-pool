@@ -340,44 +340,154 @@ final class Barcode
     // -----------------------------------------------------------------------
 
     /**
-     * A print-ready HTML page of device labels.
+     * Label stock this application can print onto, measured from the
+     * manufacturer's templates.
      *
-     * Sizing is in millimetres with an explicit @page rule, because label
-     * stock is sold by physical size and "looks right on screen" is not a
-     * useful guarantee when the output goes onto a sheet of Avery labels.
+     * A sheet of labels is a grid with margins and gutters that are fixed by
+     * whoever die-cut it, so "make the labels this size" is not enough: the
+     * first label has to start exactly where the first label is, and each one
+     * after it exactly one pitch further on. The old sheet guessed an 8 mm
+     * margin and no gutter on A4, which drifts off any real sheet within a
+     * row or two — and on US Letter was the wrong paper altogether.
+     *
+     * All measurements in millimetres. Avery's own inch figures, converted.
+     */
+    public const LABEL_STOCKS = [
+        'avery-5160' => [
+            'label' => 'Avery 5160 / 8160 — 30 per sheet, 2⅝ × 1 in, US Letter',
+            'paper' => 'letter', 'pageWidth' => 215.9, 'pageHeight' => 279.4,
+            'columns' => 3, 'rows' => 10, 'width' => 66.675, 'height' => 25.4,
+            'top' => 12.7, 'left' => 4.7625, 'gapX' => 3.175, 'gapY' => 0.0,
+        ],
+        'avery-5161' => [
+            'label' => 'Avery 5161 / 8161 — 20 per sheet, 4 × 1 in, US Letter',
+            'paper' => 'letter', 'pageWidth' => 215.9, 'pageHeight' => 279.4,
+            'columns' => 2, 'rows' => 10, 'width' => 101.6, 'height' => 25.4,
+            'top' => 12.7, 'left' => 3.96875, 'gapX' => 4.7625, 'gapY' => 0.0,
+        ],
+        'avery-5163' => [
+            'label' => 'Avery 5163 / 8163 — 10 per sheet, 4 × 2 in, US Letter',
+            'paper' => 'letter', 'pageWidth' => 215.9, 'pageHeight' => 279.4,
+            'columns' => 2, 'rows' => 5, 'width' => 101.6, 'height' => 50.8,
+            'top' => 12.7, 'left' => 3.96875, 'gapX' => 4.7625, 'gapY' => 0.0,
+        ],
+        'avery-l7160' => [
+            'label' => 'Avery L7160 — 21 per sheet, 63.5 × 38.1 mm, A4',
+            'paper' => 'A4', 'pageWidth' => 210.0, 'pageHeight' => 297.0,
+            'columns' => 3, 'rows' => 7, 'width' => 63.5, 'height' => 38.1,
+            'top' => 15.15, 'left' => 7.25, 'gapX' => 2.5, 'gapY' => 0.0,
+        ],
+    ];
+
+    public const DEFAULT_LABEL_STOCK = 'avery-5160';
+
+    /**
+     * A print-ready HTML page of device labels, one printed page per sheet.
+     *
+     * Pages are laid out explicitly rather than left to flow, so that every
+     * sheet starts at the stock's top margin; a continuous grid broken by the
+     * printer starts the second page wherever the first one stopped.
+     *
+     * $options:
+     *   stock     a key of LABEL_STOCKS
+     *   skip      labels already used on the first sheet, left blank
+     *   symbology qr | code128 | code39
+     *   orgName   printed small on each label
+     *   query     the parameters that produced this sheet, carried by the
+     *             toolbar form so changing the stock keeps the same devices
      */
     public static function labelSheet(array $devices, array $options = []): string
     {
-        $symbology    = $options['symbology'] ?? 'qr';
-        $orgName      = (string) ($options['orgName'] ?? '');
-        $columns      = (int) ($options['columns'] ?? 3);
-        $labelWidth   = (float) ($options['labelWidthMm'] ?? 63.5);
-        $labelHeight  = (float) ($options['labelHeightMm'] ?? 38.1);
+        $symbology = $options['symbology'] ?? 'qr';
+        $orgName   = (string) ($options['orgName'] ?? '');
+        $stockKey  = isset(self::LABEL_STOCKS[$options['stock'] ?? '']) ? $options['stock'] : self::DEFAULT_LABEL_STOCK;
+        $stock     = self::LABEL_STOCKS[$stockKey];
+        $perSheet  = $stock['columns'] * $stock['rows'];
+        $skip      = max(0, min($perSheet - 1, (int) ($options['skip'] ?? 0)));
 
-        $labels = '';
+        $w = $stock['width'];
+        $h = $stock['height'];
+
+        // A 1D barcode is only readable if its narrowest bar stays wide enough,
+        // so it gets the full width of the label and the words go underneath.
+        // Squeezed beside the text into 24 mm, as before, a Code 128 label was
+        // too fine for most scanners to read. A QR code is square and can sit
+        // beside the text.
+        $linear  = $symbology !== 'qr';
+        $padding = $h < 30 ? 1.5 : 3.0;
+        $qrSize  = round(min($h - 2 * $padding, $w * 0.45, 40), 2);
+        $barH    = round(min(($h - 2 * $padding) * 0.5, 20), 2);
+
+        $cells = array_fill(0, $skip, '<div class="label blank" aria-hidden="true"></div>');
 
         foreach ($devices as $device) {
             $svg = self::render((string) $device['barcode'], $symbology, [
                 'size'        => 90,
                 'height'      => 44,
                 'moduleWidth' => 1.4,
-                'fontSize'    => 8,
+                'quietZone'   => $linear ? 8 : 4,
+                'text'        => null,
             ]);
 
-            $labels .= '<div class="label">'
+            if ($linear) {
+                // Stretched to the box. Bars scale together, so the code is
+                // unchanged; only the module width grows to fill the space.
+                $svg = preg_replace('/^<svg /', '<svg preserveAspectRatio="none" ', $svg, 1);
+            }
+
+            $cells[] = '<div class="label">'
                 . '<div class="code">' . $svg . '</div>'
                 . '<div class="meta">'
                 . '<div class="value">' . Util::escapeHtml($device['barcode']) . '</div>'
-                . '<div class="name">' . Util::escapeHtml(self::truncate((string) $device['name'], 34)) . '</div>'
+                . '<div class="name">' . Util::escapeHtml(self::truncate((string) $device['name'], $w > 80 ? 48 : 34)) . '</div>'
                 . (!empty($device['asset_tag'])
                     ? '<div class="asset">Asset ' . Util::escapeHtml($device['asset_tag']) . '</div>' : '')
-                . ($orgName !== ''
+                . ($orgName !== '' && $h >= 25
                     ? '<div class="org">' . Util::escapeHtml(self::truncate($orgName, 30)) . '</div>' : '')
                 . '</div></div>';
         }
 
+        $pages = '';
+        foreach (array_chunk($cells, $perSheet) as $page) {
+            $pages .= '<section class="page">' . implode('', $page) . '</section>';
+        }
+
         $count  = count($devices);
         $plural = $count === 1 ? '' : 's';
+        $sheets = (int) ceil(($count + $skip) / $perSheet);
+        $sheetWord = $sheets === 1 ? 'sheet' : 'sheets';
+
+        // The toolbar re-requests this page with a different stock or offset.
+        $hidden = '';
+        foreach (($options['query'] ?? []) as $name => $value) {
+            if (in_array($name, ['stock', 'skip'], true) || !is_scalar($value) || $value === '') {
+                continue;
+            }
+            $hidden .= '<input type="hidden" name="' . Util::escapeHtml((string) $name)
+                . '" value="' . Util::escapeHtml((string) $value) . '">';
+        }
+
+        $choices = '';
+        foreach (self::LABEL_STOCKS as $key => $candidate) {
+            $choices .= '<option value="' . $key . '"' . ($key === $stockKey ? ' selected' : '') . '>'
+                . Util::escapeHtml($candidate['label']) . '</option>';
+        }
+
+        $f = static fn (float $n): string => self::round($n);
+
+        $layout = $linear
+            ? ".label { flex-direction: column; justify-content: center; align-items: stretch; gap: 0.8mm; }
+               .code svg { display: block; width: 100%; height: {$f($barH)}mm; }
+               .meta { text-align: center; }"
+            : ".label { flex-direction: row; align-items: center; gap: 2mm; }
+               .code { flex: 0 0 auto; }
+               .code svg { display: block; width: {$f($qrSize)}mm; height: {$f($qrSize)}mm; }";
+
+        // Bigger stock, bigger type: a 2-inch label printed in 7 pt is a waste of it.
+        $big     = $h >= 45;
+        $valuePt = $big ? 12 : 8;
+        $namePt  = $big ? 10 : 7;
+        $maxSkip = $perSheet - 1;
 
         return <<<HTML
             <!doctype html>
@@ -386,25 +496,49 @@ final class Barcode
             <meta charset="utf-8">
             <title>Device labels ({$count})</title>
             <style>
-              @page { size: A4; margin: 8mm; }
+              @page { size: {$stock['paper']}; margin: 0; }
               * { box-sizing: border-box; }
-              body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #000; background: #fff; }
-              .toolbar { padding: 12px; background: #f2f2f2; border-bottom: 1px solid #ccc; }
-              .toolbar button { font: inherit; min-height: 44px; padding: 8px 16px; cursor: pointer; }
+              html, body { margin: 0; padding: 0; }
+              body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #000; background: #fff; }
+              .toolbar { padding: 12px 16px; background: #f2f2f2; border-bottom: 1px solid #ccc; line-height: 1.5; }
               .toolbar h1 { font-size: 1.1rem; margin: 0 0 8px; }
-              .sheet { display: grid; grid-template-columns: repeat({$columns}, {$labelWidth}mm); gap: 0; }
-              .label {
-                width: {$labelWidth}mm; height: {$labelHeight}mm;
-                display: flex; align-items: center; gap: 2mm;
-                padding: 2mm; overflow: hidden;
-                page-break-inside: avoid; break-inside: avoid;
+              .toolbar form { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: end; margin: 0 0 8px; }
+              .toolbar label { display: flex; flex-direction: column; font-size: 0.9rem; font-weight: 600; }
+              .toolbar select, .toolbar input, .toolbar button { font: inherit; min-height: 44px; padding: 6px 10px; }
+              .toolbar input[type=number] { width: 7em; }
+              .toolbar p { margin: 4px 0 0; max-width: 60rem; }
+              /* A millimetre short of the paper, so rounding in the print
+                 engine cannot push a page over and leave a blank sheet
+                 between every printed one. Label positions are measured
+                 from the top, so this moves nothing. */
+              .page {
+                width: {$f($stock['pageWidth'])}mm; height: {$f($stock['pageHeight'] - 1)}mm;
+                padding: {$f($stock['top'])}mm 0 0 {$f($stock['left'])}mm;
+                display: grid;
+                grid-template-columns: repeat({$stock['columns']}, {$f($w)}mm);
+                grid-auto-rows: {$f($h)}mm;
+                column-gap: {$f($stock['gapX'])}mm; row-gap: {$f($stock['gapY'])}mm;
+                align-content: start;
+                overflow: hidden;
+                break-after: page; page-break-after: always;
               }
-              .code { flex: 0 0 auto; display: flex; align-items: center; }
-              .code svg { display: block; max-width: 24mm; max-height: 24mm; }
-              .meta { flex: 1 1 auto; min-width: 0; line-height: 1.25; }
-              .value { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 8pt; font-weight: 700; }
-              .name { font-size: 7pt; overflow: hidden; }
-              .asset, .org { font-size: 6pt; color: #333; }
+              .page:last-child { break-after: auto; page-break-after: auto; }
+              .label {
+                width: {$f($w)}mm; height: {$f($h)}mm;
+                display: flex; padding: {$f($padding)}mm; overflow: hidden;
+              }
+              {$layout}
+              .meta { min-width: 0; line-height: 1.2; overflow: hidden; }
+              .value { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: {$valuePt}pt; font-weight: 700; }
+              .name { font-size: {$namePt}pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+              .asset, .org { font-size: 6pt; color: #333; white-space: nowrap; overflow: hidden; }
+              @media screen {
+                body { background: #888; }
+                .toolbar { background: #f2f2f2; }
+                main > .page { margin: 16px auto; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.4); }
+                .label { outline: 1px dashed #bbb; outline-offset: -1px; }
+                .label.blank { background: repeating-linear-gradient(45deg, #fff, #fff 6px, #eee 6px, #eee 12px); }
+              }
               @media print { .toolbar { display: none; } }
             </style>
             </head>
@@ -412,11 +546,24 @@ final class Barcode
               <main>
               <div class="toolbar">
                 <h1>Device labels</h1>
-                <button type="button" data-print hidden>Print {$count} label{$plural}</button>
-                <noscript>Use your browser's own Print command to print this sheet.</noscript>
-                <span> &nbsp; Symbology: {$symbology} &nbsp;|&nbsp; Label size: {$labelWidth} &times; {$labelHeight} mm</span>
+                <form method="get">
+                  {$hidden}
+                  <label>Label sheets
+                    <select name="stock">{$choices}</select>
+                  </label>
+                  <label>Labels already used on the first sheet
+                    <input type="number" name="skip" min="0" max="{$maxSkip}" value="{$skip}">
+                  </label>
+                  <button type="submit">Update</button>
+                  <button type="button" data-print hidden>Print {$count} label{$plural}</button>
+                </form>
+                <noscript><p>Use your browser's own Print command to print this sheet.</p></noscript>
+                <p>{$count} label{$plural} on {$sheets} {$sheetWord}. In the print dialog choose
+                  <strong>Margins: None</strong> and <strong>Scale: 100%</strong> (not "Fit to page"),
+                  or the labels will not line up with the sheet. Print one sheet on plain paper first and
+                  hold it against a label sheet to check.</p>
               </div>
-              <div class="sheet">{$labels}</div>
+              {$pages}
               </main>
               <script src="/js/print-sheet.js"></script>
             </body>
