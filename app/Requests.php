@@ -263,46 +263,7 @@ final class Requests
             }
 
             if ($decision === 'approved' && $deviceId) {
-                $device = Db::one(
-                    'SELECT * FROM devices WHERE id = ? AND organization_id = ? FOR UPDATE',
-                    [$deviceId, $organizationId],
-                );
-                if ($device === null) {
-                    throw Util::badRequest('That device does not exist.', ['field' => 'device_id']);
-                }
-
-                $activeLoan = Db::one(
-                    'SELECT reference FROM loans WHERE device_id = ? AND status = "active"',
-                    [$deviceId],
-                );
-                if ($activeLoan !== null) {
-                    throw Util::conflict(
-                        "{$device['name']} is already on loan ({$activeLoan['reference']}) and cannot be "
-                        . 'reserved for this request.',
-                        ['device_id' => $deviceId, 'loan_reference' => $activeLoan['reference']],
-                    );
-                }
-
-                if (!in_array($device['status'], ['available', 'reserved'], true)) {
-                    throw Util::conflict(
-                        "{$device['name']} is marked \"{$device['status']}\" and cannot be reserved.",
-                        ['device_id' => $deviceId, 'status' => $device['status']],
-                    );
-                }
-
-                // "reserved" is lendable to the person it is held for, not free
-                // to be promised twice.
-                $hold = $device['status'] === 'reserved' ? Loans::holdOn($organizationId, (int) $deviceId) : null;
-
-                if ($hold !== null) {
-                    throw Util::conflict(
-                        "{$device['name']} is held for {$hold['held_for']} ({$hold['reference']}). "
-                        . 'Choose another device, or release that hold first.',
-                        ['device_id' => $deviceId, 'held_for' => $hold['held_for'], 'field' => 'device_id'],
-                    );
-                }
-
-                Db::execute('UPDATE devices SET status = "reserved", updated_at = NOW() WHERE id = ?', [$deviceId]);
+                self::reserveDevice($organizationId, $deviceId);
             }
 
             self::assertBelongs('users', $input['assignedTechId'] ?? null, $organizationId,
@@ -338,6 +299,75 @@ final class Requests
         ]);
 
         return self::get($organizationId, $requestId);
+    }
+
+    /** Promise a device to a request, if nothing else already has a claim on it. */
+    private static function reserveDevice(int $organizationId, mixed $deviceId): void
+    {
+        if (!is_scalar($deviceId) || !ctype_digit((string) $deviceId)) {
+            throw Util::badRequest('That device does not exist.', ['field' => 'device_id']);
+        }
+
+        $device = Db::one(
+            'SELECT * FROM devices WHERE id = ? AND organization_id = ? FOR UPDATE',
+            [$deviceId, $organizationId],
+        );
+        if ($device === null) {
+            throw Util::badRequest('That device does not exist.', ['field' => 'device_id']);
+        }
+
+        $activeLoan = Db::one(
+            'SELECT reference FROM loans WHERE device_id = ? AND status = "active"',
+            [$deviceId],
+        );
+        if ($activeLoan !== null) {
+            throw Util::conflict(
+                "{$device['name']} is already on loan ({$activeLoan['reference']}) and cannot be "
+                . 'reserved for this request.',
+                ['device_id' => $deviceId, 'loan_reference' => $activeLoan['reference']],
+            );
+        }
+
+        if (!in_array($device['status'], ['available', 'reserved'], true)) {
+            throw Util::conflict(
+                "{$device['name']} is marked \"{$device['status']}\" and cannot be reserved.",
+                ['device_id' => $deviceId, 'status' => $device['status']],
+            );
+        }
+
+        // "reserved" is lendable to the person it is held for, not free
+        // to be promised twice.
+        $hold = $device['status'] === 'reserved' ? Loans::holdOn($organizationId, (int) $deviceId) : null;
+
+        if ($hold !== null) {
+            throw Util::conflict(
+                "{$device['name']} is held for {$hold['held_for']} ({$hold['reference']}). "
+                . 'Choose another device, or release that hold first.',
+                ['device_id' => $deviceId, 'held_for' => $hold['held_for'], 'field' => 'device_id'],
+            );
+        }
+
+        Db::execute('UPDATE devices SET status = "reserved", updated_at = NOW() WHERE id = ?', [$deviceId]);
+    }
+
+    /**
+     * Free a device this request no longer needs, unless someone else holds it.
+     *
+     * A request can name a device without ever having reserved it, so "reserved"
+     * alone does not say the hold was this request's. Call after the request
+     * itself has stopped being approved or has moved, so holdOn() cannot find it.
+     */
+    private static function releaseDevice(int $organizationId, int $deviceId): void
+    {
+        if (Loans::holdOn($organizationId, $deviceId) !== null) {
+            return;
+        }
+
+        Db::execute(
+            'UPDATE devices SET status = "available", updated_at = NOW()
+              WHERE id = ? AND organization_id = ? AND status = "reserved"',
+            [$deviceId, $organizationId],
+        );
     }
 
     /** Move an approved request along its fulfilment track. */
@@ -388,6 +418,20 @@ final class Requests
                 );
             }
 
+            self::assertBelongs('users', $input['assignedTechId'] ?? null, $organizationId,
+                'technician', 'assigned_tech_id');
+
+            // A different device takes the promise with it. Writing only the
+            // id left the old one reserved for nobody and the new one free to
+            // be lent to anyone.
+            $newDevice = !empty($input['deviceId']) ? $input['deviceId'] : null;
+            $released  = null;
+
+            if ($newDevice !== null && (string) $newDevice !== (string) $request['device_id']) {
+                self::reserveDevice($organizationId, $newDevice);
+                $released = $request['device_id'] !== null ? (int) $request['device_id'] : null;
+            }
+
             Db::execute(
                 'UPDATE loan_requests
                     SET fulfillment_state = ?,
@@ -395,11 +439,23 @@ final class Requests
                         device_id = COALESCE(?, device_id),
                         updated_at = NOW()
                   WHERE id = ?',
-                [$state, $input['assignedTechId'] ?? null, $input['deviceId'] ?? null, $requestId],
+                [$state, $input['assignedTechId'] ?? null, $newDevice, $requestId],
             );
 
-            return ['request' => $request, 'from' => $request['fulfillment_state']];
+            if ($released !== null) {
+                self::releaseDevice($organizationId, $released);
+            }
+
+            return ['request' => $request, 'from' => $request['fulfillment_state'], 'released' => $released];
         });
+
+        if ($result['released'] !== null) {
+            try {
+                Reservations::promoteNextForDevice($actor, $organizationId, $result['released']);
+            } catch (\Throwable $e) {
+                error_log('[requests] waitlist promotion failed: ' . $e->getMessage());
+            }
+        }
 
         Audit::record($actor, [
             'organizationId' => $organizationId,
@@ -452,12 +508,18 @@ final class Requests
         // fulfilment would then fail with "already on loan", and the request
         // would be left approved with the hold it was relying on already gone.
         $loan = Db::transaction(static function () use ($request, $organizationId, $actor, $input, $device): array {
+            // Only its own hold. Clearing someone else's took the device away
+            // from a waitlist entry that had just been told it was ready.
             if (!empty($request['device_id'])) {
-                Db::execute(
-                    'UPDATE devices SET status = "available"
-                      WHERE id = ? AND organization_id = ? AND status = "reserved"',
-                    [$request['device_id'], $organizationId],
-                );
+                $hold = Loans::holdOn($organizationId, (int) $request['device_id']);
+
+                if ($hold === null || ($hold['kind'] === 'request' && $hold['id'] === (int) $request['id'])) {
+                    Db::execute(
+                        'UPDATE devices SET status = "available"
+                          WHERE id = ? AND organization_id = ? AND status = "reserved"',
+                        [$request['device_id'], $organizationId],
+                    );
+                }
             }
 
             return Loans::checkOut($actor, [
@@ -519,20 +581,16 @@ final class Requests
                 );
             }
 
-            if (!empty($request['device_id'])) {
-                Db::execute(
-                    'UPDATE devices SET status = "available", updated_at = NOW()
-                      WHERE id = ? AND status = "reserved"',
-                    [$request['device_id']],
-                );
-            }
-
             Db::execute(
                 'UPDATE loan_requests SET status = "cancelled", review_notes = COALESCE(?, review_notes),
                         updated_at = NOW()
                   WHERE id = ?',
                 [$reason, $requestId],
             );
+
+            if (!empty($request['device_id'])) {
+                self::releaseDevice($organizationId, (int) $request['device_id']);
+            }
 
             return $request;
         });
@@ -596,7 +654,8 @@ final class Requests
         ], 'r.created_at DESC');
 
         $rows = Db::all(
-            self::SELECT . " WHERE {$whereSql} ORDER BY {$order} LIMIT {$limit} OFFSET {$offset}",
+            // r.id last: see Devices::list() on why every paged list ends on a unique column.
+            self::SELECT . " WHERE {$whereSql} ORDER BY {$order}, r.id LIMIT {$limit} OFFSET {$offset}",
             $params,
         );
 

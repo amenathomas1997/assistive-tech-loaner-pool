@@ -31,7 +31,10 @@ export async function renderAudit() {
   const groupField = field({
     name: 'group', label: 'Activity type', type: 'select',
     options: [{ value: '', label: 'Everything' },
-      ...groups.map((g) => ({ value: g, label: groupLabel(g) }))],
+      // In the order a person reads them, not the order of the internal keys.
+      ...groups
+        .map((g) => ({ value: g, label: groupLabel(g) }))
+        .sort((a, b) => a.label.localeCompare(b.label))],
   });
 
   const fromField = field({ name: 'from', label: 'From', type: 'date' });
@@ -72,11 +75,21 @@ export async function renderAudit() {
     }
   };
 
+  // The export gives you what you are looking at. It used to ignore every
+  // filter and hand back the newest 10,000 entries regardless, so narrowing
+  // to one week of sign-ins and pressing Export produced something else.
+  const exportLink = el('a', { class: 'btn', href: downloadUrl('/audit/export.csv', {}) }, 'Export CSV');
+  const syncExport = () => {
+    exportLink.href = downloadUrl('/audit/export.csv', {
+      search: state.search, action_prefix: state.actionPrefix, from: state.from, to: state.to,
+    });
+  };
+
   const runFilter = debounce(() => { state.page = 1; load(); });
-  searchField.control.addEventListener('input', (e) => { state.search = e.target.value; runFilter(); });
-  groupField.control.addEventListener('change', (e) => { state.actionPrefix = e.target.value; state.page = 1; load(); });
-  fromField.control.addEventListener('change', (e) => { state.from = e.target.value; state.page = 1; load(); });
-  toField.control.addEventListener('change', (e) => { state.to = e.target.value; state.page = 1; load(); });
+  searchField.control.addEventListener('input', (e) => { state.search = e.target.value; syncExport(); runFilter(); });
+  groupField.control.addEventListener('change', (e) => { state.actionPrefix = e.target.value; state.page = 1; syncExport(); load(); });
+  fromField.control.addEventListener('change', (e) => { state.from = e.target.value; state.page = 1; syncExport(); load(); });
+  toField.control.addEventListener('change', (e) => { state.to = e.target.value; state.page = 1; syncExport(); load(); });
 
   container.append(
     el('div', { class: 'page-header' }, [
@@ -88,7 +101,7 @@ export async function renderAudit() {
             'entries, including administrators.',
         }),
       ]),
-      el('a', { class: 'btn', href: downloadUrl('/audit/export.csv', {}) }, 'Export CSV'),
+      exportLink,
     ]),
 
     el('form', {
@@ -109,6 +122,9 @@ function groupLabel(group) {
     client: 'Clients', program: 'Programs', user: 'Staff accounts',
     settings: 'Settings', period: 'Loan periods', apikey: 'API keys',
     email: 'Email', install: 'Installation',
+    agreement: 'Loan agreements', attachment: 'Photos and files', backup: 'Backups',
+    kit: 'Kits', repair: 'Repairs', reservation: 'Waitlist', retention: 'Data retention',
+    site: 'Sites and transfers', sms: 'Text messages',
   }[group] || group;
 }
 
@@ -139,7 +155,7 @@ export async function renderReports() {
           trendCard(report.trend),
           returnPerformanceCard(report.return_performance, report.request_performance),
         ]),
-        funding ? fundingCard(funding) : null,
+        funding ? fundingCard(funding, { from: state.from, to: state.to }) : null,
         repairs ? repairsCard(repairs) : null,
         categoryCard(report.categories),
         el('div', { class: 'grid grid-2' }, [
@@ -156,8 +172,14 @@ export async function renderReports() {
     }
   };
 
-  fromField.control.addEventListener('change', (e) => { state.from = e.target.value; load(); });
-  toField.control.addEventListener('change', (e) => { state.to = e.target.value; load(); });
+  // Exports cover the dates on screen, not all time.
+  const usageExport = el('a', { class: 'btn', href: downloadUrl('/reports/devices.csv', {}) }, 'Export device usage');
+  const syncExport = () => {
+    usageExport.href = downloadUrl('/reports/devices.csv', { from: state.from, to: state.to });
+  };
+
+  fromField.control.addEventListener('change', (e) => { state.from = e.target.value; syncExport(); load(); });
+  toField.control.addEventListener('change', (e) => { state.to = e.target.value; syncExport(); load(); });
 
   container.append(
     el('div', { class: 'page-header' }, [
@@ -165,7 +187,7 @@ export async function renderReports() {
         el('h1', { text: 'Reports' }),
         el('p', { text: 'How often equipment is used, what is in demand, and what never moves.' }),
       ]),
-      el('a', { class: 'btn', href: downloadUrl('/reports/devices.csv', {}) }, 'Export device usage'),
+      usageExport,
     ]),
 
     el('form', {
@@ -304,11 +326,11 @@ function returnPerformanceCard(returns, requests) {
  * for. Both are null rather than zero when no purchase cost is recorded, so a
  * missing price never masquerades as free equipment.
  */
-function fundingCard(funding) {
+function fundingCard(funding, range = {}) {
   return el('section', { class: 'card', 'aria-labelledby': 'funding-heading' }, [
     el('div', { class: 'card-header' }, [
       el('h2', { id: 'funding-heading', text: 'Funding and grant reporting' }),
-      el('a', { class: 'btn btn-sm', href: downloadUrl('/reports/funding.csv', {}) }, 'Export CSV'),
+      el('a', { class: 'btn btn-sm', href: downloadUrl('/reports/funding.csv', range) }, 'Export CSV'),
     ]),
     el('p', {
       class: 'muted',

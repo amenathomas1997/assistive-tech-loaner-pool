@@ -42,6 +42,7 @@ final class Devices
         'purchase_date', 'purchase_cost', 'warranty_expires', 'funding_source', 'notes',
     ];
 
+    /** Joins one active loan, the next due: a licence with three seats out is still one row. */
     private const SELECT = '
         SELECT d.*,
                p.name AS program_name,
@@ -56,7 +57,11 @@ final class Devices
           FROM devices d
           LEFT JOIN programs p ON p.id = d.owner_program_id
           LEFT JOIN sites st ON st.id = d.site_id
-          LEFT JOIN loans l ON l.device_id = d.id AND l.status = "active"
+          LEFT JOIN loans l ON l.id = (
+                   SELECT al.id FROM loans al
+                    WHERE al.device_id = d.id AND al.status = "active"
+                    ORDER BY al.due_at IS NULL, al.due_at, al.id LIMIT 1
+               )
           LEFT JOIN users t ON t.id = l.tech_id
           LEFT JOIN clients c ON c.id = l.client_id
           LEFT JOIN programs lp ON lp.id = l.program_id';
@@ -152,6 +157,9 @@ final class Devices
         }
 
         foreach ($rows as &$device) {
+            // Knowing a licence exists is one thing; holding its key is another.
+            $device['licence_key'] = null;
+
             if (empty($device['active_loan_id']) || isset($visible[(int) $device['active_loan_id']])) {
                 continue;
             }
@@ -175,7 +183,8 @@ final class Devices
         $params = [$organizationId];
 
         if (($filters['status'] ?? null) === 'available') {
-            $where[] = 'd.status = "available" AND l.id IS NULL';
+            // A licence stays "available" while it has a free seat, loans or no.
+            $where[] = 'd.status = "available" AND (l.id IS NULL OR d.seats_total > 1)';
         } elseif (!empty($filters['status'])) {
             $where[]  = 'd.status = ?';
             $params[] = $filters['status'];
@@ -206,13 +215,22 @@ final class Devices
         $order = Util::orderBy($options['sort'] ?? null, $sortColumns, 'd.name ASC');
 
         $rows = Db::all(
-            self::SELECT . " WHERE {$whereSql} ORDER BY {$order} LIMIT {$limit} OFFSET {$offset}",
+            // d.id last, so the order is the same every time it is asked for.
+            // Rows that tie on the sort column (forty devices all called "iPad",
+            // everything with the same status) otherwise come back in whatever
+            // order the database likes, which can differ between page 1 and
+            // page 2: a device then shows on both pages, or on neither.
+            self::SELECT . " WHERE {$whereSql} ORDER BY {$order}, d.id LIMIT {$limit} OFFSET {$offset}",
             $params,
         );
 
         $total = (int) Db::value(
             "SELECT COUNT(DISTINCT d.id) FROM devices d
-               LEFT JOIN loans l ON l.device_id = d.id AND l.status = 'active'
+               LEFT JOIN loans l ON l.id = (
+                   SELECT al.id FROM loans al
+                    WHERE al.device_id = d.id AND al.status = 'active'
+                    ORDER BY al.due_at IS NULL, al.due_at, al.id LIMIT 1
+               )
               WHERE {$whereSql}",
             $params,
         );
@@ -274,6 +292,9 @@ final class Devices
             ? max(1, (int) ($data['seats_total'] ?? 1))
             : 1;
 
+        Loans::assertBelongs('programs', $data['owner_program_id'] ?? null, $organizationId, 'program');
+        Loans::assertBelongs('sites', $data['site_id'] ?? null, $organizationId, 'site');
+
         $id = Db::insert(
             'INSERT INTO devices
                (organization_id, barcode, asset_tag, serial_number, name, category, manufacturer, model,
@@ -286,11 +307,11 @@ final class Devices
                 $data['name'], $data['category'] ?? null, $data['manufacturer'] ?? null,
                 $data['model'] ?? null, $data['description'] ?? null, $data['status'] ?? 'available',
                 $data['condition_note'] ?? null, $data['location'] ?? null, $data['home_location'] ?? null,
-                $data['owner_program_id'] ?? null, $data['purchase_date'] ?? null,
+                ($data['owner_program_id'] ?? null) ?: null, $data['purchase_date'] ?? null,
                 $data['purchase_cost'] ?? null, $data['warranty_expires'] ?? null,
                 $data['funding_source'] ?? null, $data['notes'] ?? null,
                 $itemType, $seats, $data['licence_key'] ?? null,
-                $data['licence_expires'] ?? null, $data['site_id'] ?? null,
+                $data['licence_expires'] ?? null, ($data['site_id'] ?? null) ?: null,
             ],
         );
 
@@ -639,6 +660,9 @@ final class Devices
                 $deviceId, $organizationId,
             ],
         );
+
+        // Whoever it was promised to goes back in the queue, keeping their place.
+        Reservations::releaseHoldsOnDevice($organizationId, $deviceId);
 
         Audit::record($actor, [
             'organizationId' => $organizationId,
@@ -1077,11 +1101,24 @@ final class Devices
             if ($custom !== []) {
                 $device['custom_fields'] = json_encode($custom, JSON_UNESCAPED_SLASHES);
             }
-            if (empty($device['status'])) {
+            $existing = self::findExisting($organizationId, $device);
+
+            // Only a new row takes the default. Filling it in for a match
+            // reset every device the sheet touched, retired ones included.
+            if ($existing === null && empty($device['status'])) {
                 $device['status'] = $defaultStatus;
             }
 
-            $existing = self::findExisting($organizationId, $device);
+            // A spreadsheet cannot end a loan, close a repair or release a
+            // hold, so it cannot say any of those has happened either.
+            if ($existing !== null && isset($device['status'])
+                && (in_array($device['status'], ['checked_out', 'reserved'], true)
+                    || in_array($existing['status'], ['checked_out', 'reserved'], true)
+                    || !empty($existing['active_repair_id'])
+                    || !empty($existing['disposed_at']))
+            ) {
+                unset($device['status']);
+            }
 
             $plan[] = [
                 'line'            => $line,
@@ -1260,7 +1297,8 @@ final class Devices
             }
 
             $row = Db::one(
-                "SELECT id, barcode FROM devices WHERE {$column} = ? AND organization_id = ?",
+                "SELECT id, barcode, status, active_repair_id, disposed_at
+                   FROM devices WHERE {$column} = ? AND organization_id = ?",
                 [$device[$key], $organizationId],
             );
 

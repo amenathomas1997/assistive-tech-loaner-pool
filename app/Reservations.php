@@ -186,7 +186,10 @@ final class Reservations
      */
     public static function promoteNextForDevice(?array $actor, int $organizationId, int $deviceId): ?array
     {
-        $holdHours = (int) Settings::get($organizationId, 'reservations.hold_hours') ?: 48;
+        // A value saved before the setting had limits could be zero or negative,
+        // which would expire the hold in the same breath as granting it.
+        $holdHours = (int) Settings::get($organizationId, 'reservations.hold_hours');
+        $holdHours = $holdHours >= 1 ? $holdHours : 48;
 
         $promoted = Db::transaction(static function () use ($organizationId, $deviceId, $holdHours): ?array {
             $device = Db::one(
@@ -498,7 +501,7 @@ final class Reservations
         $rows = Db::all(
             self::SELECT . " WHERE {$whereSql}
               ORDER BY FIELD(r.status, 'ready', 'waiting', 'fulfilled', 'expired', 'cancelled'),
-                       r.priority DESC, r.created_at ASC
+                       r.priority DESC, r.created_at ASC, r.id ASC
               LIMIT {$limit} OFFSET {$offset}",
             $params,
         );

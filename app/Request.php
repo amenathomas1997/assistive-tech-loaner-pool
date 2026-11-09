@@ -119,7 +119,12 @@ final class Request
 
     public function cookie(string $name): ?string
     {
-        return $_COOKIE[$name] ?? null;
+        // "Cookie: loaner_session[]=x" arrives from PHP as an array. Handing
+        // that to code which hashes a string was a 500 for anyone who cared
+        // to send it; it is not a session, so it is treated as no cookie.
+        $value = $_COOKIE[$name] ?? null;
+
+        return is_string($value) ? $value : null;
     }
 
     public function wantsJson(): bool

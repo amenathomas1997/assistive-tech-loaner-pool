@@ -2,7 +2,7 @@
  * Kits, waitlist and repairs.
  */
 
-import { api } from '../api.js';
+import { api, allPages } from '../api.js';
 import {
   el, clear, mount, field, dataTable, dateCell, pill, emptyState, pagination, modal,
   toastOk, toastError, toastWarn, announce, debounce, loadingBlock,
@@ -123,7 +123,7 @@ function kitCard(kit, reload) {
 }
 
 async function openKitDialog(kit, onDone) {
-  const devicesResponse = await api.devices({ per_page: 500, sort: 'name' });
+  const devicesResponse = await allPages(api.devices, { sort: 'name' });
 
   const nameField = field({ name: 'name', label: 'Kit name', required: true, value: kit?.name || '' });
   const descriptionField = field({
@@ -167,7 +167,10 @@ async function openKitDialog(kit, onDone) {
       kit ? el('div', { class: 'row', style: { marginTop: '12px' } }, [
         el('button', {
           type: 'button', class: 'btn btn-danger btn-sm',
-          onClick: async () => {
+          onClick: async (event) => {
+            // Found now: the event forgets its target once this function waits.
+            const dialog = event.currentTarget.closest('dialog');
+
             const ok = await confirmDialog({
               title: `Delete "${kit.name}"?`,
               message: 'The kit is removed. The devices in it are unaffected and keep their history.',
@@ -178,6 +181,9 @@ async function openKitDialog(kit, onDone) {
             try {
               await api.deleteKit(kit.id);
               toastOk('Kit deleted. Its devices are unaffected.');
+              // Closed, or the form for a kit that no longer exists stays on
+              // screen with a "Save kit" button that can only fail.
+              dialog?.close();
               onDone?.();
             } catch (err) { toastError(err.message); }
           },
@@ -226,7 +232,7 @@ async function openKitDialog(kit, onDone) {
 async function openKitCheckoutDialog(kit, onDone) {
   const [periods, clients, programs, techs] = await Promise.all([
     api.loanPeriods(),
-    can('clients.read') ? api.clients({ per_page: 200 }) : Promise.resolve({ data: [] }),
+    can('clients.read') ? allPages(api.clients) : Promise.resolve({ data: [] }),
     can('programs.read') ? api.programs() : Promise.resolve({ data: [] }),
     can('users.read') ? api.users({ role: 'tech' }) : Promise.resolve({ data: [] }),
   ]);
@@ -438,7 +444,7 @@ export async function renderWaitlist() {
 
 export async function openReservationDialog(onDone, { device = null } = {}) {
   const [clients, programs, facets] = await Promise.all([
-    api.clients({ per_page: 200 }),
+    allPages(api.clients),
     api.programs(),
     api.deviceFacets(),
   ]);
@@ -460,16 +466,29 @@ export async function openReservationDialog(onDone, { device = null } = {}) {
   const deviceField = field({
     name: 'device_id', label: 'Device', type: 'select',
     value: device?.id || '',
-    options: [{ value: '', label: 'Choose a device…' }],
+    options: [
+      { value: '', label: 'Choose a device…' },
+      // The device this dialog was opened for is offered straight away, so it
+      // is already chosen before the full list has arrived.
+      ...(device ? [{ value: device.id, label: `${device.name} (${device.barcode})` }] : []),
+    ],
   });
 
   // Populated lazily so the dialog opens fast even with a large inventory.
-  api.devices({ per_page: 500, sort: 'name' }).then((response) => {
+  allPages(api.devices, { sort: 'name' }).then((response) => {
+    // Whatever is chosen now stays chosen. The list used to replace the
+    // "Choose a device…" line as well, which left the first device in the
+    // inventory selected without anybody having picked it.
+    const chosen = deviceField.control.value;
+    const rows = response.data.slice();
+
+    if (device && !rows.some((d) => String(d.id) === String(device.id))) rows.unshift(device);
+
     clear(deviceField.control).append(
-      ...response.data.map((d) => el('option', {
-        value: d.id, selected: String(d.id) === String(device?.id || ''),
-      }, `${d.name} (${d.barcode})`)),
+      el('option', { value: '' }, 'Choose a device…'),
+      ...rows.map((d) => el('option', { value: d.id }, `${d.name} (${d.barcode})`)),
     );
+    deviceField.control.value = chosen;
   }).catch(() => {});
 
   const clientField = field({
@@ -706,7 +725,7 @@ export async function renderRepairDetail({ params }) {
 }
 
 async function openRepairDialog(device, onDone) {
-  const devicesResponse = await api.devices({ per_page: 500, sort: 'name' });
+  const devicesResponse = await allPages(api.devices, { sort: 'name' });
   const techs = can('users.read') ? await api.users({ role: 'tech' }) : { data: [] };
 
   const deviceField = field({

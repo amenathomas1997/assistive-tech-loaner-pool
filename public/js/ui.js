@@ -461,9 +461,50 @@ export function pill(status, kind = 'device') {
   return el('span', { class: `pill ${style.class}` }, style.label);
 }
 
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+const DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+/**
+ * Turn a date from the server into a Date, reading it the way it was meant.
+ *
+ * The server sends two shapes and `new Date()` gets both wrong somewhere:
+ *
+ *   "2026-03-01"           A calendar day: a warranty end, a "needed by".
+ *                          JavaScript reads this as midnight UTC, which in any
+ *                          American time zone is the evening of the day
+ *                          before, so every such date showed one day early.
+ *
+ *   "2026-03-01 14:30:00"  A moment in the server's local time. With a space
+ *                          instead of a "T" this is not a format browsers are
+ *                          required to understand, and Safari has not always.
+ *
+ * Both are built from their parts here, so they mean the same thing in every
+ * browser. Anything else is left to the browser, and an unreadable value comes
+ * back as an invalid Date for the caller to check.
+ */
+export function parseServerDate(value) {
+  if (value instanceof Date) return value;
+  if (typeof value === 'number') return new Date(value);
+
+  const text = String(value ?? '').trim();
+
+  let m = DATE_ONLY.exec(text);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+
+  m = DATE_TIME.exec(text);
+  if (m) {
+    return new Date(
+      Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+      Number(m[4]), Number(m[5]), Number(m[6] || 0),
+    );
+  }
+
+  return new Date(text);
+}
+
 export function formatDate(value, { withTime = false } = {}) {
   if (!value) return '—';
-  const date = new Date(value);
+  const date = parseServerDate(value);
   if (Number.isNaN(date.getTime())) return '—';
 
   return date.toLocaleDateString(undefined, {
@@ -472,10 +513,23 @@ export function formatDate(value, { withTime = false } = {}) {
   });
 }
 
-/** "in 3 days" / "2 days ago". Paired with an absolute date, never alone. */
+/**
+ * "in 3 days" / "2 days ago". Paired with an absolute date, never alone.
+ *
+ * Counted in calendar days, not in 24-hour blocks: something due at nine
+ * tomorrow morning is due "tomorrow" whether it is looked at over breakfast or
+ * at ten at night, and a warranty that ends today has not ended "yesterday"
+ * because it is now the afternoon.
+ */
 export function relativeDays(value) {
   if (!value) return '';
-  const days = Math.round((new Date(value).getTime() - Date.now()) / 86400000);
+
+  const date = parseServerDate(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  // Rounded because a day is 23 or 25 hours long twice a year.
+  const days = Math.round((startOfDay(date) - startOfDay(new Date())) / 86400000);
 
   if (days === 0) return 'today';
   if (days === 1) return 'tomorrow';
@@ -487,9 +541,18 @@ export function relativeDays(value) {
 export function dateCell(value, { withTime = false, relative = false } = {}) {
   if (!value) return el('span', { class: 'muted' }, '—');
 
-  const absolute = formatDate(value, { withTime });
-  return el('time', { datetime: new Date(value).toISOString() }, [
-    absolute,
+  const date = parseServerDate(value);
+
+  // toISOString() throws on a date it cannot represent, and one unreadable
+  // value in one row should not take the whole table down with it.
+  if (Number.isNaN(date.getTime())) return el('span', { class: 'muted' }, '—');
+
+  // A calendar day stays a calendar day for a screen reader too, rather than
+  // becoming an instant that may fall on a different day in UTC.
+  const machine = DATE_ONLY.test(String(value).trim()) ? String(value).trim() : date.toISOString();
+
+  return el('time', { datetime: machine }, [
+    formatDate(value, { withTime }),
     relative ? el('span', { class: 'cell-sub', text: relativeDays(value) }) : null,
   ]);
 }

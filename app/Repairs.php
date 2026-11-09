@@ -335,9 +335,21 @@ final class Repairs
                     default        => 'available',
                 };
 
+                // Still promised to an approved request? Then it goes back to
+                // being held for them, not onto the open shelf.
+                if ($deviceStatus === 'available') {
+                    $hold = Loans::holdOn($organizationId, (int) $repair['device_id']);
+
+                    if ($hold !== null && $hold['kind'] === 'request') {
+                        $deviceStatus = 'reserved';
+                    }
+                }
+
+                // Lost and retired are decisions made elsewhere, and closing
+                // the ticket must not put a disposed device back in stock.
                 Db::execute(
                     'UPDATE devices
-                        SET status = CASE WHEN status = "checked_out" THEN status ELSE ? END,
+                        SET status = CASE WHEN status IN ("checked_out", "lost", "retired") THEN status ELSE ? END,
                             active_repair_id = NULL, updated_at = NOW()
                       WHERE id = ?',
                     [$deviceStatus, $repair['device_id']],
@@ -435,7 +447,8 @@ final class Repairs
         ], 'r.created_at DESC');
 
         $rows = Db::all(
-            self::SELECT . " WHERE {$whereSql} ORDER BY {$order} LIMIT {$limit} OFFSET {$offset}",
+            // r.id last: see Devices::list() on why every paged list ends on a unique column.
+            self::SELECT . " WHERE {$whereSql} ORDER BY {$order}, r.id LIMIT {$limit} OFFSET {$offset}",
             $params,
         );
 

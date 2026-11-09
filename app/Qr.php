@@ -1,6 +1,6 @@
 <?php
 /**
- * QR encoder: byte mode, error correction level M, versions 1-6.
+ * QR encoder: byte mode, error correction level M, versions 1-10.
  *
  * Scoped deliberately. This application encodes two kinds of string — a device
  * barcode ("LP-7K3F9Q2M", 11 bytes) and a scanner pairing URL (~60 bytes) —
@@ -8,6 +8,7 @@
  * the version-information block and a far larger table of alignment positions
  * for capacity nothing here will ever use, so it is left out and anything too
  * long is rejected with a clear error rather than silently mis-encoded.
+ * (Versions 7-10 were added later, for two-factor set-up links.)
  *
  * Level M (~15% recoverable) rather than L because these labels live on
  * equipment that gets handled, scuffed and stickered over; rather than H
@@ -133,6 +134,9 @@ final class Qr
     /** Render as an SVG. */
     public static function svg(string $text, array $options = []): string
     {
+        // What a screen reader says. Not the encoded text when a title is
+        // given: for two-factor set-up that text is the secret, read aloud.
+        $label  = (string) ($options['title'] ?? "QR code {$text}");
         $size   = (int) ($options['size'] ?? 160);
         $margin = (int) ($options['margin'] ?? 2); // quiet zone, in modules
 
@@ -153,13 +157,13 @@ final class Qr
 
         return sprintf(
             '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" '
-            . 'shape-rendering="crispEdges" role="img" aria-label="QR code %s">'
+            . 'shape-rendering="crispEdges" role="img" aria-label="%s">'
             . '<rect width="%d" height="%d" fill="#fff"/><path d="%s" fill="#000"/></svg>',
             $size,
             $size,
             $total,
             $total,
-            htmlspecialchars($text, ENT_QUOTES | ENT_XML1 | ENT_SUBSTITUTE, 'UTF-8'),
+            htmlspecialchars($label, ENT_QUOTES | ENT_XML1 | ENT_SUBSTITUTE, 'UTF-8'),
             $total,
             $total,
             $path,

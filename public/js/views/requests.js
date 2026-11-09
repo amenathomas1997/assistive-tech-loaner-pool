@@ -3,7 +3,7 @@
  * technician's view of approving and delivering it.
  */
 
-import { api } from '../api.js';
+import { api, allPages } from '../api.js';
 import {
   el, clear, mount, field, dataTable, dateCell, pill, emptyState, pagination, modal,
   toastOk, toastError, announce, debounce, loadingBlock, alert as alertBox, formatDate,
@@ -124,10 +124,10 @@ export async function renderRequests() {
 
 export async function renderNewRequest() {
   const [clientsResponse, programsResponse, periodsResponse, devicesResponse] = await Promise.all([
-    api.clients({ per_page: 200 }),
+    allPages(api.clients),
     api.programs(),
     api.loanPeriods(),
-    api.devices({ status: 'available', per_page: 200 }),
+    allPages(api.devices, { status: 'available', sort: 'name' }),
   ]);
 
   const fields = {
@@ -418,7 +418,7 @@ function fulfilmentControls(request, onDone) {
 
 async function openApproveDialog(request, onDone) {
   const [devicesResponse, usersResponse, periodsResponse] = await Promise.all([
-    api.devices({ status: 'available', per_page: 200 }),
+    allPages(api.devices, { status: 'available', sort: 'name' }),
     can('users.read') ? api.users({ role: 'tech' }) : Promise.resolve({ data: [] }),
     api.loanPeriods(),
   ]);

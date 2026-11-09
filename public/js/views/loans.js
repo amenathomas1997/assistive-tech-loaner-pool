@@ -3,11 +3,11 @@
  * check-in dialogs shared with the device list and the scan station.
  */
 
-import { api, downloadUrl } from '../api.js';
+import { api, allPages, downloadUrl } from '../api.js';
 import {
   el, clear, mount, field, dataTable, dateCell, pill, emptyState, pagination, modal,
   toastOk, toastError, toastWarn, announce, debounce, loadingBlock,
-  alert as alertBox, formatDate, relativeDays, confirmDialog,
+  alert as alertBox, formatDate, relativeDays, confirmDialog, parseServerDate,
 } from '../ui.js';
 import { can } from '../app.js';
 import { photoPicker, signaturePad } from '../capture.js';
@@ -383,7 +383,7 @@ export async function openCheckoutDialog({ device = null, onDone = null } = {}) 
   const [periodsResponse, clientsResponse, programsResponse, usersResponse, settings, agreementSettings] =
     await Promise.all([
       api.loanPeriods(),
-      can('clients.read') ? api.clients({ per_page: 200 }) : Promise.resolve({ data: [] }),
+      can('clients.read') ? allPages(api.clients) : Promise.resolve({ data: [] }),
       can('programs.read') ? api.programs() : Promise.resolve({ data: [] }),
       can('users.read') ? api.users({ role: 'tech' }) : Promise.resolve({ data: [] }),
       api.settings().catch(() => ({ settings: {} })),
@@ -915,7 +915,7 @@ export async function openCheckinDialog({ device = null, loan = null, onDone = n
   return modal({
     title: `Check in ${title}`,
     body: el('div', {}, [
-      loan?.due_at && new Date(loan.due_at) < new Date()
+      loan?.due_at && parseServerDate(loan.due_at) < new Date()
         ? alertBox(
             `This device is coming back late — it was due on ${formatDate(loan.due_at)}.`,
             { type: 'warn', title: 'Returned late' })

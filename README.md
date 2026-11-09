@@ -289,7 +289,7 @@ as SC 2.1.4 requires, and never fire while you are typing.
 ```
 
 Drops and recreates the test database, runs the web installer through its own
-API, then exercises the application end to end — 824 checks covering
+API, then exercises the application end to end — 860 checks covering
 authentication, RBAC, spreadsheet import, barcode encoding, the loan
 lifecycle, the request workflow, kits and accessories, agreements and
 signatures, condition photos, the waitlist, repairs, funding reporting, bulk

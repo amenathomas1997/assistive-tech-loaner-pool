@@ -194,10 +194,9 @@ function deviceColumns(reload, { selected = null, onSelectionChange = null } = {
     },
     {
       key: 'status', label: 'Status',
-      render: (device) => el('span', {}, [
-        pill(device.is_overdue ? 'lost' : device.status),
-        device.is_overdue ? el('span', { class: 'cell-sub', text: 'Overdue' }) : null,
-      ]),
+      // Overdue is not lost. This used to borrow the "Lost" badge for its red
+      // colour, so a device one day late read as "Lost" in the inventory.
+      render: (device) => (device.is_overdue ? pill('overdue', 'loan') : pill(device.status)),
     },
     {
       key: 'holder', label: 'Held by',
@@ -729,6 +728,9 @@ export async function openDeviceDialog(device, onDone) {
     purchase_date: field({ name: 'purchase_date', label: 'Purchase date', type: 'date', value: device?.purchase_date?.slice(0, 10) || '' }),
     purchase_cost: field({ name: 'purchase_cost', label: 'Purchase cost', type: 'number', step: '0.01', value: device?.purchase_cost || '' }),
     funding_source: field({ name: 'funding_source', label: 'Funding source', value: device?.funding_source || '' }),
+    // Shown on the device page and accepted by the server, but there was no
+    // way to enter it short of a CSV import.
+    warranty_expires: field({ name: 'warranty_expires', label: 'Warranty ends', type: 'date', value: device?.warranty_expires?.slice(0, 10) || '' }),
     notes: field({ name: 'notes', label: 'Notes', type: 'textarea', value: device?.notes || '' }),
   };
 
@@ -742,7 +744,7 @@ export async function openDeviceDialog(device, onDone) {
       el('div', { class: 'form-grid' }, [fields.status, fields.condition_note]),
       el('div', { class: 'form-grid' }, [fields.location, fields.owner_program_id]),
       el('div', { class: 'form-grid' }, [fields.purchase_date, fields.purchase_cost]),
-      fields.funding_source,
+      el('div', { class: 'form-grid' }, [fields.funding_source, fields.warranty_expires]),
       fields.notes,
       device ? null : el('p', {
         class: 'field-help',

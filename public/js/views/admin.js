@@ -231,6 +231,7 @@ export async function renderSettings() {
     ['notify.request_approved', 'A request is approved', 'Goes to the counselor who asked.'],
     ['notify.request_denied', 'A request is declined', 'Goes to the counselor, with the reason.'],
     ['notify.ready_for_pickup', 'Equipment is ready to collect', 'Goes to the counselor.'],
+    ['notify.reservation_ready', 'A waitlisted device becomes free', 'Goes to whoever asked to be told.'],
     ['notify.checked_out', 'A device is checked out', 'Goes to the client and technician.'],
     ['notify.due_soon', 'A loan is due back soon', 'Goes to whoever holds the device.'],
     ['notify.overdue', 'A loan is overdue', 'Goes to whoever holds the device.'],
@@ -302,6 +303,10 @@ export async function renderSettings() {
     type: 'checkbox', id: 'scan-remote', checked: Boolean(settings['scan.remote_enabled']), disabled: readOnly,
   });
 
+  const offlineScan = el('input', {
+    type: 'checkbox', id: 'scan-offline', checked: Boolean(settings['scan.offline_enabled']), disabled: readOnly,
+  });
+
   const policyButton = el('button', { type: 'submit', class: 'btn btn-primary', disabled: readOnly }, 'Save policy');
 
   const policyForm = el('form', {
@@ -312,6 +317,7 @@ export async function renderSettings() {
         const updates = {
           'loans.max_per_client': Number(maxPerClient.control.value),
           'scan.remote_enabled': remoteScan.checked,
+          'scan.offline_enabled': offlineScan.checked,
         };
         for (const [key, box] of Object.entries(policyBoxes)) updates[key] = box.checked;
 
@@ -336,6 +342,15 @@ export async function renderSettings() {
       el('span', {}, [
         'Allow pairing a phone as a remote scanner',
         el('span', { class: 'option-help' }, 'Lets a signed-in phone send scans to a desktop scan station.'),
+      ]),
+    ]),
+    el('label', { class: 'checkbox', for: 'scan-offline' }, [
+      offlineScan,
+      el('span', {}, [
+        'Keep check-ins when the connection drops',
+        el('span', { class: 'option-help' },
+          'Returns scanned while offline are held on that computer and sent when it reconnects. '
+          + 'Check-outs are never held.'),
       ]),
     ]),
     policyButton,
@@ -387,7 +402,8 @@ export async function renderSettings() {
     outcomesSection(settings, readOnly),
     hygieneSection(settings, readOnly),
     smsSection(settings, readOnly),
-    schedulerSection(),
+    waitlistSection(settings, readOnly),
+    schedulerSection(readOnly),
     backupSection(readOnly),
     retentionSection(settings, readOnly),
     twoFactorSection(settings, readOnly),
@@ -612,24 +628,31 @@ function twoFactorSection(settings, readOnly) {
             { type: 'info', title: 'Two-factor is off' }),
 
       el('div', { class: 'btn-group', style: { marginTop: '12px' } }, [
+        // Each button carries its own handler. They used to be found afterwards
+        // by position, first, second, third, and since only some of them are on
+        // the page at once the positions were wrong whenever two-factor was on:
+        // "New recovery codes" started a fresh enrolment and "Turn it off"
+        // offered new codes, so there was no way to turn it off at all.
         status.enabled
           ? null
-          : el('button', { type: 'button', class: 'btn btn-primary' },
-              'Set up two-factor sign-in'),
+          : el('button', {
+              type: 'button', class: 'btn btn-primary',
+              onClick: () => enrolTwoFactor(() => refresh()),
+            }, 'Set up two-factor sign-in'),
         status.enabled
-          ? el('button', { type: 'button', class: 'btn' }, 'New recovery codes')
+          ? el('button', {
+              type: 'button', class: 'btn',
+              onClick: () => newRecoveryCodes(() => refresh()),
+            }, 'New recovery codes')
           : null,
         status.enabled && !status.required_for_you
-          ? el('button', { type: 'button', class: 'btn btn-ghost' }, 'Turn it off')
+          ? el('button', {
+              type: 'button', class: 'btn btn-ghost',
+              onClick: () => disableTwoFactor(() => refresh()),
+            }, 'Turn it off')
           : null,
       ]),
     );
-
-    const [setUp, newCodes, turnOff] = [...body.querySelectorAll('button')];
-
-    setUp?.addEventListener('click', () => enrolTwoFactor(() => refresh()));
-    newCodes?.addEventListener('click', () => newRecoveryCodes());
-    turnOff?.addEventListener('click', () => disableTwoFactor(() => refresh()));
   };
 
   const refresh = () => api.twoFactor().then(render).catch((err) => {
@@ -764,7 +787,7 @@ function showRecoveryCodes(codes, notice) {
   });
 }
 
-async function newRecoveryCodes() {
+async function newRecoveryCodes(onDone) {
   const passwordField = field({
     name: 'password', label: 'Your password', type: 'password', required: true,
     autocomplete: 'current-password',
@@ -786,6 +809,8 @@ async function newRecoveryCodes() {
             const result = await api.regenerateRecoveryCodes(passwordField.control.value);
             close(true);
             showRecoveryCodes(result.recovery_codes, result.notice);
+            // The card says how many codes are left, and that has just changed.
+            onDone?.();
           } catch (err) {
             passwordField.setError(err.message);
             passwordField.control.focus();
@@ -1095,6 +1120,7 @@ function settingsPanel({ id, title, blurb, settings, readOnly, fields, extra = n
       help: spec.help,
       disabled: readOnly,
       min: spec.min,
+      max: spec.max,
       autocomplete: spec.autocomplete || 'off',
     });
 
@@ -1140,6 +1166,30 @@ function settingsPanel({ id, title, blurb, settings, readOnly, fields, extra = n
     extra,
     form,
   ]);
+}
+
+// --- Waitlist ----------------------------------------------------------------
+
+function waitlistSection(settings, readOnly) {
+  return settingsPanel({
+    id: 'waitlist', title: 'Waitlist', settings, readOnly,
+    blurb:
+      'When every unit of something is out, the next person can ask to be told when one comes '
+      + 'back. The device is then held for them for a while, so it is not lent to whoever happens '
+      + 'to be at the desk.',
+    fields: [
+      {
+        key: 'reservations.enabled', type: 'boolean',
+        label: 'Let people join a waitlist',
+        help: 'Switching this off stops new entries. Anyone already waiting stays in the queue.',
+      },
+      {
+        key: 'reservations.hold_hours', type: 'integer', min: 1, max: 720,
+        label: 'Hold a returned device for this many hours',
+        help: 'After that it goes to the next person waiting, or back on the shelf. Between 1 and 720.',
+      },
+    ],
+  });
 }
 
 // --- Trial outcomes --------------------------------------------------------
@@ -1368,7 +1418,7 @@ function photosSection(settings, readOnly) {
 
 // --- Scheduled reminders ---------------------------------------------------
 
-function schedulerSection() {
+function schedulerSection(readOnly) {
   const body = el('div', {}, loadingBlock('Checking the reminder job…'));
 
   const load = async () => {
@@ -1395,7 +1445,9 @@ function schedulerSection() {
         }),
 
         el('div', { class: 'btn-group' }, [
-          el('button', {
+          // Running the job and reading the cron command both need
+          // settings.write; somebody who can only look is not offered either.
+          readOnly ? null : el('button', {
             type: 'button', class: 'btn btn-primary',
             onClick: async (event) => {
               await withBusy(event.currentTarget, 'Running…', async () => {

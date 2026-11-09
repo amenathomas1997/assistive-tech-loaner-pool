@@ -49,7 +49,7 @@ final class Reports
                         AS due_within_7_days,
                     SUM(status = "returned" AND returned_at >= DATE_SUB(NOW(), INTERVAL 30 DAY))
                         AS returned_30d,
-                    SUM(checked_out_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) AS issued_30d
+                    SUM(status <> "cancelled" AND checked_out_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) AS issued_30d
                FROM loans WHERE organization_id = ?',
             [(int) Settings::get($organizationId, 'notify.due_soon_days'), $organizationId],
         );

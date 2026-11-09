@@ -132,8 +132,9 @@ function typingInto(target) {
  * @param {() => void}              handlers.showHelp
  * @param {(key: string) => boolean} handlers.can  capability check
  * @param {(msg: string, opts?: object) => void} handlers.announce
+ * @param {() => boolean} [handlers.active]  false while nobody is signed in
  */
-export function installShortcuts({ navigate, showHelp, can, announce }) {
+export function installShortcuts({ navigate, showHelp, can, announce, active = () => true }) {
   let awaitingSecondKey = false;
   let timer = null;
 
@@ -147,6 +148,12 @@ export function installShortcuts({ navigate, showHelp, can, announce }) {
 
   document.addEventListener('keydown', (event) => {
     if (!shortcutsEnabled()) return;
+
+    // Nobody signed in: there is nowhere to go and no help to show.
+    if (!active()) {
+      endSequence(null);
+      return;
+    }
 
     // Let the browser and the operating system keep their own combinations.
     if (event.metaKey || event.ctrlKey || event.altKey) return;

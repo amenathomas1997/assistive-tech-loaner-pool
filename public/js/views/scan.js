@@ -74,6 +74,9 @@ export async function renderScanStation() {
       { onProgress: () => refreshBanner() },
     );
 
+    // Another flush is already running and will report for itself.
+    if (result.busy) return;
+
     if (result.sent) {
       toastOk(`${result.sent} queued return(s) sent.`);
       announce(`${result.sent} queued returns have been sent.`);
@@ -90,7 +93,17 @@ export async function renderScanStation() {
   }
 
   if (offlineEnabled) {
-    watchConnectivity((online) => {
+    // Stops listening once this screen has been left. Nothing tells a view it
+    // is being replaced, so the listener checks for itself: every visit used
+    // to leave one behind for good, each of them flushing the queue whenever
+    // the connection came back.
+    let shown = false;
+    let stopWatching = () => {};
+
+    stopWatching = watchConnectivity((online) => {
+      if (container.isConnected) shown = true;
+      else if (shown) { stopWatching(); return; }
+
       refreshBanner();
       if (online) flushNow();
     });
@@ -211,7 +224,7 @@ export async function renderScanStation() {
           el('h2', { style: { margin: 0 } }, el('a', { href: `#/devices/${device.id}` }, device.name)),
           el('p', { class: 'mono muted', style: { margin: '2px 0 0' }, text: device.barcode }),
         ]),
-        pill(device.is_overdue ? 'lost' : device.status),
+        device.is_overdue ? pill('overdue', 'loan') : pill(device.status),
       ]),
 
       el('dl', { class: 'detail-list' }, [

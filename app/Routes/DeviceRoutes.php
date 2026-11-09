@@ -315,7 +315,13 @@ final class DeviceRoutes
         }
 
         Response::html(Barcode::labelSheet($devices, [
-            'symbology'    => $request->queryParam('symbology') ?? $organization['barcode_symbology'] ?? 'qr',
+            // Validated, because the sheet prints this value back into the page.
+            'symbology'    => Util::oneOf(
+                $request->queryParam('symbology') ?? $organization['barcode_symbology'] ?? 'qr',
+                Barcode::SYMBOLOGIES,
+                'symbology',
+                true,
+            ),
             'orgName'      => $organization['name'] ?? '',
             'columns'      => (int) ($request->queryParam('columns') ?? 3),
             'labelWidthMm' => (float) ($request->queryParam('width') ?? 63.5),

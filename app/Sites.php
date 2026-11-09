@@ -485,7 +485,7 @@ final class Sites
         $whereSql = implode(' AND ', $where);
 
         $rows = Db::all(
-            self::TRANSFER_SELECT . " WHERE {$whereSql} ORDER BY t.created_at DESC "
+            self::TRANSFER_SELECT . " WHERE {$whereSql} ORDER BY t.created_at DESC, t.id DESC "
             . "LIMIT {$limit} OFFSET {$offset}",
             $params,
         );

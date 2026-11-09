@@ -300,6 +300,175 @@ eq 'a wrong password does not reveal a deactivated account' "$(code "$NOJAR" POS
 eq 'the right password is told the account is deactivated'  "$(code "$NOJAR" POST /auth/login "$RIGHT_PW")" 403
 rm -f "$NOJAR"
 
+# --- Found by the fourth audit ------------------------------------------------
+
+rows() { python3 -c 'import sys,json; print(len(json.load(sys.stdin)["data"]))'; }
+checkout() { api "$ADMIN" POST /loans/checkout "{\"device\":$1,\"client_id\":$2,\"custom_days\":7}"; }
+import_csv() { # import_csv "header\nrow"   a real import, not a dry run
+  local body; body=$(python3 -c 'import json,sys; print(json.dumps({"content":sys.argv[1].replace("\\n","\n"),"dry_run":False}))' "$1")
+  api "$ADMIN" POST /devices/import "$body" > /dev/null
+}
+
+# Re-importing a spreadsheet must not reset what the sheet did not mention.
+A4_TAG="A4$RANDOM$RANDOM"; A4_RETIRED=$(device retired)
+A4_TAG_BODY="{\"asset_tag\":\"$A4_TAG\"}"
+api "$ADMIN" PATCH "/devices/$A4_RETIRED" "$A4_TAG_BODY" > /dev/null
+import_csv "asset_tag,name\n$A4_TAG,Renamed by import"
+eq 'an import with no status column leaves a retired device retired' "$(status_of "$A4_RETIRED")" retired
+
+# A status column cannot contradict a loan.
+A4_OUT_TAG="A4$RANDOM$RANDOM"; A4_OUT=$(device)
+A4_OUT_BODY="{\"asset_tag\":\"$A4_OUT_TAG\"}"
+api "$ADMIN" PATCH "/devices/$A4_OUT" "$A4_OUT_BODY" > /dev/null
+checkout "$A4_OUT" "$MY_CLIENT" > /dev/null
+import_csv "asset_tag,name,status\n$A4_OUT_TAG,Still out,available"
+eq 'an import cannot mark a device on loan as available'    "$(status_of "$A4_OUT")" checked_out
+
+# One licence is one row, however many seats are out.
+LICENCE_NAME="$TAG licence $RANDOM"
+LICENCE_BODY="{\"name\":\"$LICENCE_NAME\",\"item_type\":\"licence\",\"seats_total\":3,\"licence_key\":\"SECRET-KEY-1\"}"
+LICENCE=$(api "$ADMIN" POST /devices "$LICENCE_BODY" | jqv device.id)
+checkout "$LICENCE" "$MY_CLIENT" > /dev/null
+checkout "$LICENCE" "$MY_CLIENT" > /dev/null
+LICENCE_Q=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$LICENCE_NAME")
+eq 'a licence with two seats out is listed once'            "$(api "$ADMIN" GET "/devices?search=$LICENCE_Q" | rows)" 1
+eq 'a licence with a free seat counts as available'         "$(api "$ADMIN" GET "/devices?status=available&search=$LICENCE_Q" | rows)" 1
+eq 'a counselor is not shown a licence key'                 "$(api "$VRC" GET "/devices/$LICENCE" | jqv device.licence_key)" ''
+
+# Cancelling a request only releases a hold it actually had.
+HELD=$(device)
+HOLDER=$(api "$ADMIN" POST /requests '{"requested_details":"x","justification":"y"}' | jqv request.id)
+HELD_BODY="{\"device_id\":$HELD}"
+api "$ADMIN" POST "/requests/$HOLDER/approve" "$HELD_BODY" > /dev/null
+BYSTANDER_BODY="{\"device_id\":$HELD,\"justification\":\"y\"}"
+BYSTANDER=$(api "$ADMIN" POST /requests "$BYSTANDER_BODY" | jqv request.id)
+CANCEL_BODY='{"reason":"no longer needed"}'
+api "$ADMIN" POST "/requests/$BYSTANDER/cancel" "$CANCEL_BODY" > /dev/null
+eq 'cancelling one request does not free a device held for another' "$(status_of "$HELD")" reserved
+
+# Fulfilling a request cannot jump the waitlist.
+WAIT_ON='{"settings":{"reservations.enabled":true}}'
+api "$ADMIN" PATCH /admin/settings "$WAIT_ON" > /dev/null
+WAITED=$(device)
+LOAN=$(checkout "$WAITED" "$MY_CLIENT" | jqv loan.id)
+REQ_CLIENT_BODY='{"first_name":"Other","last_name":"Client"}'
+REQ_CLIENT=$(api "$ADMIN" POST /clients "$REQ_CLIENT_BODY" | jqv client.id)
+WAIT_BODY="{\"device_id\":$WAITED,\"client_id\":$MY_CLIENT}"
+RES=$(api "$ADMIN" POST /reservations "$WAIT_BODY" | jqv reservation.id)
+JUMPER_BODY="{\"device_id\":$WAITED,\"client_id\":$REQ_CLIENT,\"justification\":\"y\"}"
+JUMPER=$(api "$ADMIN" POST /requests "$JUMPER_BODY" | jqv request.id)
+api "$ADMIN" POST "/requests/$JUMPER/approve" '{}' > /dev/null
+CHECKIN_BODY="{\"loan_id\":$LOAN}"
+api "$ADMIN" POST /loans/checkin "$CHECKIN_BODY" > /dev/null
+eq 'the returned device is held for the waitlist'           "$(status_of "$WAITED")" reserved
+FULFIL_BODY='{"custom_days":7}'
+eq 'a request cannot be fulfilled over a waitlist hold'     "$(code "$ADMIN" POST "/requests/$JUMPER/fulfil" "$FULFIL_BODY")" 409
+eq 'and the device is still held'                           "$(status_of "$WAITED")" reserved
+
+# Disposing of a promised device puts the person back in the queue.
+DISPOSE_BODY='{"method":"donated"}'
+api "$ADMIN" POST "/devices/$WAITED/dispose" "$DISPOSE_BODY" > /dev/null
+eq 'disposing of a held device returns the waitlist entry to waiting' "$(api "$ADMIN" GET "/reservations/$RES" | jqv reservation.status)" waiting
+
+# Closing a repair does not undo a disposal, or forget a promise.
+GONE_DEVICE=$(device)
+REPAIR_BODY="{\"device_id\":$GONE_DEVICE,\"fault\":\"broken\"}"
+GONE_REPAIR=$(api "$ADMIN" POST /repairs "$REPAIR_BODY" | jqv repair.id)
+api "$ADMIN" POST "/devices/$GONE_DEVICE/dispose" "$DISPOSE_BODY" > /dev/null
+CLOSE_BODY='{"status":"cancelled"}'
+api "$ADMIN" PATCH "/repairs/$GONE_REPAIR" "$CLOSE_BODY" > /dev/null
+eq 'closing a repair does not bring a disposed device back' "$(status_of "$GONE_DEVICE")" retired
+
+PROMISED2=$(device)
+PROMISE_REQ=$(api "$ADMIN" POST /requests '{"requested_details":"x","justification":"y"}' | jqv request.id)
+PROMISE_BODY="{\"device_id\":$PROMISED2}"
+api "$ADMIN" POST "/requests/$PROMISE_REQ/approve" "$PROMISE_BODY" > /dev/null
+REPAIR2_BODY="{\"device_id\":$PROMISED2,\"fault\":\"broken\"}"
+PROMISE_REPAIR=$(api "$ADMIN" POST /repairs "$REPAIR2_BODY" | jqv repair.id)
+api "$ADMIN" PATCH "/repairs/$PROMISE_REPAIR" "$CLOSE_BODY" > /dev/null
+eq 'a repaired device goes back to the request it was promised to' "$(status_of "$PROMISED2")" reserved
+
+# Changing the device on a request moves the hold with it.
+MOVED_TO=$(device)
+MOVE_BODY="{\"state\":\"provisioning\",\"device_id\":$MOVED_TO}"
+api "$ADMIN" POST "/requests/$PROMISE_REQ/fulfillment" "$MOVE_BODY" > /dev/null
+eq 'moving a request to another device reserves the new one' "$(status_of "$MOVED_TO")" reserved
+eq 'and releases the old one'                               "$(status_of "$PROMISED2")" available
+NO_DEVICE='{"state":"provisioning","device_id":99999999}'
+eq 'a request cannot be moved to a device that does not exist' "$(code "$ADMIN" POST "/requests/$PROMISE_REQ/fulfillment" "$NO_DEVICE")" 400
+
+# The label page only prints what it validated.
+eq 'the label page refuses an unknown barcode type'         "$(code "$ADMIN" GET "/devices/labels?ids=$MOVED_TO&symbology=%3Cimg%20src%3Dx%3E")" 400
+
+# ---------------------------------------------------------------------------
+# Fifth audit
+# ---------------------------------------------------------------------------
+
+# A page number past what the database can offset by is a quiet empty page.
+for path in /devices /loans /clients /audit /requests; do
+  eq "an absurd page number on $path is not a server error"  "$(code "$ADMIN" GET "$path?page=99999999999999999999")" 200
+done
+
+# A session cookie sent as an array is simply not a session.
+eq 'an array-shaped session cookie is treated as signed out' \
+   "$(curl -s -o /dev/null -w '%{http_code}' -H 'Cookie: loaner_session[]=x' "$BASE/api/v1/devices")" 401
+
+# A counselor saving their own client keeps them. The edit form used to send
+# an empty counselor, which unassigned the client and locked the counselor out.
+UNASSIGN_BODY='{"first_name":"Mine","counselor_id":null}'
+api "$VRC" PATCH "/clients/$MY_CLIENT" "$UNASSIGN_BODY" > /dev/null
+eq 'a counselor cannot unassign themselves from a client'   "$(api "$ADMIN" GET "/clients/$MY_CLIENT" | jqv client.counselor_id)" "$VRC_A"
+eq 'and can still open the client afterwards'               "$(code "$VRC" GET "/clients/$MY_CLIENT")" 200
+REASSIGN_BODY="{\"counselor_id\":$VRC_B}"
+api "$VRC" PATCH "/clients/$MY_CLIENT" "$REASSIGN_BODY" > /dev/null
+eq 'nor hand a client to another counselor'                 "$(api "$ADMIN" GET "/clients/$MY_CLIENT" | jqv client.counselor_id)" "$VRC_A"
+
+# Clients can be found by phone number.
+PHONE="555-01$((RANDOM % 90 + 10))-$RANDOM"
+PHONE_BODY="{\"first_name\":\"Phone\",\"last_name\":\"$TAG-phone\",\"phone\":\"$PHONE\"}"
+PHONE_CLIENT=$(api "$ADMIN" POST /clients "$PHONE_BODY" | jqv client.id)
+eq 'client search matches a phone number'                   "$(api "$ADMIN" GET "/clients?search=$PHONE" | jqv data.0.id)" "$PHONE_CLIENT"
+
+# Settings are checked before any of them are saved.
+setting() { api "$ADMIN" GET /admin/settings | python3 -c '
+import sys, json
+print(json.load(sys.stdin)["settings"].get(sys.argv[1]))' "$1"; }
+ARRAY_SETTING='{"settings":{"notify.due_soon_days":[1,2]}}'
+eq 'a list where a setting wants one value is refused'      "$(code "$ADMIN" PATCH /admin/settings "$ARRAY_SETTING")" 400
+HOLD_BEFORE=$(setting reservations.hold_hours)
+NEGATIVE_HOLD='{"settings":{"reservations.hold_hours":-3}}'
+eq 'a negative waitlist hold is refused'                    "$(code "$ADMIN" PATCH /admin/settings "$NEGATIVE_HOLD")" 400
+eq 'and the hold is unchanged'                              "$(setting reservations.hold_hours)" "$HOLD_BEFORE"
+WORD_SETTING='{"settings":{"loans.max_per_client":"lots"}}'
+eq 'a word where a setting wants a number is refused'       "$(code "$ADMIN" PATCH /admin/settings "$WORD_SETTING")" 400
+MAX_BEFORE=$(setting loans.max_per_client)
+MIXED_SETTINGS='{"settings":{"loans.max_per_client":7,"notify.due_soon_days":0}}'
+eq 'one bad setting refuses the whole request'              "$(code "$ADMIN" PATCH /admin/settings "$MIXED_SETTINGS")" 400
+eq 'and the good setting beside it is not half-saved'       "$(setting loans.max_per_client)" "$MAX_BEFORE"
+GOOD_SETTING="{\"settings\":{\"reservations.hold_hours\":$HOLD_BEFORE}}"
+eq 'a setting inside its range is still accepted'           "$(code "$ADMIN" PATCH /admin/settings "$GOOD_SETTING")" 200
+
+# Sorting clients by name, descending, reverses the last names too.
+SORT_A_BODY="{\"first_name\":\"Zed\",\"last_name\":\"$TAG-sort Aaa\"}"
+SORT_Z_BODY="{\"first_name\":\"Amy\",\"last_name\":\"$TAG-sort Zzz\"}"
+SORT_A=$(api "$ADMIN" POST /clients "$SORT_A_BODY" | jqv client.id)
+SORT_Z=$(api "$ADMIN" POST /clients "$SORT_Z_BODY" | jqv client.id)
+eq 'clients sort by last name ascending'                    "$(api "$ADMIN" GET "/clients?search=$TAG-sort&sort=name" | jqv data.0.id)" "$SORT_A"
+eq 'and descending'                                         "$(api "$ADMIN" GET "/clients?search=$TAG-sort&sort=-name" | jqv data.0.id)" "$SORT_Z"
+
+# Paging through rows that tie on the sort column never repeats or drops one.
+TIE="$TAG-tie-$RANDOM"
+TIE_BODY="{\"name\":\"$TIE\",\"category\":\"$TIE\"}"
+for _ in 1 2 3 4 5 6; do api "$ADMIN" POST /devices "$TIE_BODY" > /dev/null; done
+SEEN=$(for page in 1 2 3; do
+  api "$ADMIN" GET "/devices?search=$TIE&sort=name&per_page=2&page=$page"
+  echo
+done | python3 -c '
+import sys, json
+ids = [row["id"] for line in sys.stdin if line.strip() for row in json.loads(line)["data"]]
+print(len(ids), len(set(ids)))')
+eq 'three pages of identically named devices hold six different devices' "$SEEN" '6 6'
+
 rm -f "$ADMIN" "$VRC" "$TECH"
 
 echo

@@ -235,11 +235,19 @@ final class Util
     // -----------------------------------------------------------------------
 
     public const MAX_PAGE_SIZE     = 200;
+
+    public const MAX_PAGE = 1000000;
     public const DEFAULT_PAGE_SIZE = 50;
 
     public static function pagination(array $query): array
     {
-        $page     = max(1, (int) ($query['page'] ?? 1));
+        // Capped, because the offset is page x page size and a page number in
+        // the quintillions made that product a float. PHP then refused to
+        // pass it where an integer is declared, and "?page=9999999999999999999"
+        // was a 500 on every list in the application. No list here can have a
+        // millionth page, so anything past it simply comes back empty.
+        $page     = is_scalar($query['page'] ?? 1) ? (int) ($query['page'] ?? 1) : 1;
+        $page     = min(self::MAX_PAGE, max(1, $page));
         $requested = (int) ($query['per_page'] ?? self::DEFAULT_PAGE_SIZE);
         $perPage  = min(self::MAX_PAGE_SIZE, max(1, $requested ?: self::DEFAULT_PAGE_SIZE));
 
@@ -300,7 +308,16 @@ final class Util
             return $fallback;
         }
 
-        return $allowed[$key] . ($desc ? ' DESC' : ' ASC');
+        // A sort key may stand for several columns ("last name, first name"),
+        // and the direction has to reach every one of them. Appended once to
+        // the end, "-name" sorted last names A to Z and only the first names
+        // within each backwards.
+        $direction = $desc ? ' DESC' : ' ASC';
+
+        return implode(', ', array_map(
+            static fn (string $column): string => trim($column) . $direction,
+            explode(',', $allowed[$key]),
+        ));
     }
 
     // -----------------------------------------------------------------------

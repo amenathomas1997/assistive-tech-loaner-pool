@@ -1269,7 +1269,8 @@ final class Loans
         ], 'l.checked_out_at DESC');
 
         $rows = Db::all(
-            self::SELECT . " WHERE {$whereSql} ORDER BY {$order} LIMIT {$limit} OFFSET {$offset}",
+            // l.id last: see Devices::list() on why every paged list ends on a unique column.
+            self::SELECT . " WHERE {$whereSql} ORDER BY {$order}, l.id LIMIT {$limit} OFFSET {$offset}",
             $params,
         );
 

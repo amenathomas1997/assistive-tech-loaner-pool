@@ -85,9 +85,10 @@ final class Directory
         if (!empty($filters['search'])) {
             $where[] = '(c.first_name LIKE ? OR c.last_name LIKE ? '
                      . 'OR CONCAT(c.first_name, " ", c.last_name) LIKE ? '
-                     . 'OR c.email LIKE ? OR c.external_ref LIKE ?)';
+                     . 'OR c.email LIKE ? OR c.external_ref LIKE ? '
+                     . 'OR c.phone LIKE ? OR c.mobile LIKE ?)';
             $like = '%' . $filters['search'] . '%';
-            array_push($params, $like, $like, $like, $like, $like);
+            array_push($params, $like, $like, $like, $like, $like, $like, $like);
         }
 
         $whereSql = implode(' AND ', $where);
@@ -99,7 +100,8 @@ final class Directory
         ], 'c.last_name, c.first_name');
 
         $rows = Db::all(
-            self::CLIENT_SELECT . " WHERE {$whereSql} ORDER BY {$order} LIMIT {$limit} OFFSET {$offset}",
+            // c.id last: see Devices::list() on why every paged list ends on a unique column.
+            self::CLIENT_SELECT . " WHERE {$whereSql} ORDER BY {$order}, c.id LIMIT {$limit} OFFSET {$offset}",
             $params,
         );
 

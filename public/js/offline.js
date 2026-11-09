@@ -111,7 +111,28 @@ async function removeEntry(id) {
  * `send` is injected rather than imported so this module has no dependency on
  * the API client, and so tests can drive it.
  */
-export async function flushQueue(send, { onProgress = null } = {}) {
+export async function flushQueue(send, options = {}) {
+  // One at a time. Coming back online, pressing "Send now" and a second
+  // listener left behind by an earlier visit to the scan station could all
+  // start a flush in the same moment, each reading the same pending entries
+  // and each sending them: the same return posted two or three times, with
+  // all but the first coming back as "that loan is already closed".
+  if (flushing) {
+    return { sent: 0, failed: 0, remaining: await countPending(), failures: [], busy: true };
+  }
+
+  flushing = true;
+
+  try {
+    return await runFlush(send, options);
+  } finally {
+    flushing = false;
+  }
+}
+
+let flushing = false;
+
+async function runFlush(send, { onProgress = null } = {}) {
   const all = await listQueue();
   const pending = all
     .filter((entry) => entry.status === 'pending')
@@ -133,8 +154,11 @@ export async function flushQueue(send, { onProgress = null } = {}) {
       // A 4xx will never succeed on retry — the state it assumed has changed.
       // A network error will, so leave it pending.
       // 401 is the session, not the scan. It comes right once somebody signs
-    // back in, and treating it as final threw away every queued return.
-    const permanent = err.status && err.status >= 400 && err.status < 500 && err.status !== 401;
+      // back in, and treating it as final threw away every queued return.
+      // 408 and 429 are "not now" rather than "no": a long queue sent in one
+      // burst can trip the rate limit, and that must not discard the rest.
+      const permanent = err.status && err.status >= 400 && err.status < 500
+        && ![401, 408, 429].includes(err.status);
 
       if (permanent || entry.attempts >= 5) {
         entry.status = 'failed';

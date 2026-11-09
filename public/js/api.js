@@ -305,6 +305,39 @@ export const api = {
   fundingReport: (query) => request('GET', '/reports/funding', { query }),
 };
 
+/**
+ * Every row of a list, not just its first page.
+ *
+ * For the pickers in dialogs: "choose a client", "choose a device". The
+ * server will not return more than 200 rows at a time however many are asked
+ * for, so a picker that asked once showed the first 200 clients in
+ * alphabetical order and gave no sign that anybody was missing. Somebody
+ * called Young or Zhang could not be lent anything from those dialogs.
+ *
+ * Stops at 25 pages (5,000 rows) so a very large list cannot hang a dialog;
+ * `meta.truncated` says when that happened.
+ *
+ * @param {(query: object) => Promise<{data: any[], meta?: object}>} fetchPage
+ */
+export async function allPages(fetchPage, query = {}, { maxPages = 25 } = {}) {
+  const rows = [];
+  let meta = {};
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const result = await fetchPage({ ...query, per_page: 200, page });
+    const batch = result.data || [];
+
+    rows.push(...batch);
+    meta = result.meta || {};
+
+    if (batch.length === 0 || page >= (meta.total_pages || 1)) break;
+  }
+
+  const total = meta.total ?? rows.length;
+
+  return { data: rows, meta: { ...meta, total, truncated: rows.length < total } };
+}
+
 /** Build an absolute download URL with query parameters. */
 export function downloadUrl(path, query = {}) {
   const params = new URLSearchParams();

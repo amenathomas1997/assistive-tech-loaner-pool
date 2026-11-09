@@ -125,8 +125,62 @@ final class Settings
         'outcomes', 'hygiene', 'sms', 'sites', 'retention', 'security', 'sso',
     ];
 
+    /**
+     * The smallest and largest value each whole-number setting may hold.
+     *
+     * Nothing checked these. A hold of minus three hours was saved as asked,
+     * and the next person promoted from a waitlist had their hold expire before
+     * the email telling them about it was sent. Zero where zero has a meaning
+     * ("no limit", "keep them") is allowed; elsewhere it is not.
+     */
+    private const RANGES = [
+        'notify.due_soon_days'      => [1, 60],
+        'loans.max_per_client'      => [0, 100],
+        'scan.channel_ttl_minutes'  => [5, 1440],
+        'photos.max_per_phase'      => [1, 20],
+        'reservations.hold_hours'   => [1, 720],
+        'outcomes.chase_after_days' => [1, 365],
+        'retention.client_years'    => [0, 100],
+        'retention.audit_years'     => [0, 100],
+        'retention.email_log_days'  => [0, 36500],
+        'sso.session_hours'         => [1, 336],
+    ];
+
     /** @var array<int, array<string, mixed>> */
     private static array $cache = [];
+
+    /**
+     * Refuse a value that cannot be what the setting is.
+     *
+     * Runs over the whole request before anything is written, so a form with
+     * one bad box saves nothing rather than half of itself.
+     */
+    private static function validate(string $key, string $type, mixed $value): void
+    {
+        if ($value !== null && !is_scalar($value)) {
+            throw Util::badRequest("The setting {$key} must be a single value.", ['field' => $key]);
+        }
+
+        if ($type !== 'integer') {
+            return;
+        }
+
+        $text = is_bool($value) ? '' : trim((string) $value);
+
+        if (preg_match('/^-?\d{1,9}$/', $text) !== 1) {
+            throw Util::badRequest("The setting {$key} must be a whole number.", ['field' => $key]);
+        }
+
+        [$min, $max] = self::RANGES[$key] ?? [0, 999999999];
+        $number      = (int) $text;
+
+        if ($number < $min || $number > $max) {
+            throw Util::badRequest(
+                "The setting {$key} must be between {$min} and {$max}.",
+                ['field' => $key, 'min' => $min, 'max' => $max],
+            );
+        }
+    }
 
     private static function coerce(string $type, mixed $raw, mixed $default): mixed
     {
@@ -233,6 +287,12 @@ final class Settings
     {
         $changed = [];
         $unknown = [];
+
+        foreach ($updates as $key => $value) {
+            if (isset(self::DEFINITIONS[$key])) {
+                self::validate((string) $key, self::DEFINITIONS[$key][0], $value);
+            }
+        }
 
         foreach ($updates as $key => $value) {
             if (!isset(self::DEFINITIONS[$key])) {

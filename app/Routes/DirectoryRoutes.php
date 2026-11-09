@@ -114,11 +114,23 @@ final class DirectoryRoutes
             }
         }
 
+        $body = $request->body();
+
+        // A counselor may only ever see their own caseload, so changing the
+        // counselor on one of their clients makes it vanish from under them
+        // with no way back. The edit form used to do exactly that by accident:
+        // it cannot list other counselors for them, so it sent "nobody", and
+        // saving a phone number quietly removed the client from their list.
+        // Moving a client between counselors is for someone who can see both.
+        if (Auth::isRestrictedToOwnRecords($auth)) {
+            unset($body['counselor_id'], $body['counselorId']);
+        }
+
         $client = Directory::updateClient(
             Audit::actor($request),
             (int) $auth['organizationId'],
             $clientId,
-            $request->body(),
+            $body,
         );
 
         Response::json(['client' => $client]);

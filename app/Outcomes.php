@@ -196,7 +196,7 @@ final class Outcomes
                LEFT JOIN clients c ON c.id = l.client_id
                LEFT JOIN users u ON u.id = l.tech_id
               WHERE {$where}
-              ORDER BY l.returned_at DESC
+              ORDER BY l.returned_at DESC, l.id DESC
               LIMIT {$limit} OFFSET {$offset}",
             $params,
         );

@@ -120,7 +120,10 @@ function renderScanner(stationConnected) {
     }
     manualField.setError(null);
     manualField.control.value = '';
-    send(value, 'manual');
+    // The same result area and counter the camera uses. Without them the
+    // result was written over the typing box itself, so a second code could
+    // not be typed without disconnecting and pairing again.
+    send(value, 'manual', lastScan, counter);
   });
 
   const stopButton = el('button', { type: 'button', class: 'btn btn-ghost btn-block' }, 'Disconnect');
@@ -248,8 +251,8 @@ async function decodeLoop(video, lastScan, counter, status) {
   state.loop = requestAnimationFrame(tick);
 }
 
-async function send(barcode, source, lastScan = null, counter = null) {
-  const target = lastScan || document.querySelector('#scanner-root > div:nth-of-type(3)');
+async function send(barcode, source, lastScan, counter) {
+  const target = lastScan;
 
   try {
     const result = await api.pushScan(state.code, { barcode, source });

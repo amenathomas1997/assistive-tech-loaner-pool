@@ -64,7 +64,11 @@ final class Kits
                     l.id AS active_loan_id, l.reference AS active_loan_reference, l.due_at
                FROM kit_items ki
                JOIN devices d ON d.id = ki.device_id
-               LEFT JOIN loans l ON l.device_id = d.id AND l.status = "active"
+               LEFT JOIN loans l ON l.id = (
+                   SELECT al.id FROM loans al
+                    WHERE al.device_id = d.id AND al.status = "active"
+                    ORDER BY al.due_at IS NULL, al.due_at, al.id LIMIT 1
+               )
               WHERE ki.kit_id = ?
               ORDER BY ki.sort_order, d.name',
             [$kitId],

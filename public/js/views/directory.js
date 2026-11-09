@@ -112,6 +112,35 @@ async function openClientDialog(client, onDone) {
     api.programs(),
   ]);
 
+  // Somebody who cannot list staff (a counselor) cannot be offered a choice
+  // of counselor, so the box is left out for them and the field is not sent.
+  // It used to be shown with "Unassigned" as its only option, and saving any
+  // change at all then unassigned the client from the counselor editing them.
+  const canChooseCounselor = can('users.read');
+
+  // The lists hold only active counselors and programs. A client who still
+  // belongs to one that has since been deactivated must keep it on the form,
+  // or opening the dialog and saving would quietly clear it.
+  const counselorOptions = usersResponse.data.map((u) => ({ value: u.id, label: u.full_name }));
+  if (client?.counselor_id && !counselorOptions.some((o) => String(o.value) === String(client.counselor_id))) {
+    counselorOptions.push({
+      value: client.counselor_id,
+      label: `${client.counselor_name || 'Former counselor'} (no longer active)`,
+    });
+  }
+
+  const programOptions = programsResponse.data.map((p) => ({ value: p.id, label: p.name }));
+  if (client?.program_id && !programOptions.some((o) => String(o.value) === String(client.program_id))) {
+    programOptions.push({
+      value: client.program_id,
+      label: `${client.program_name || 'Former program'} (no longer active)`,
+    });
+  }
+
+  const smsConsent = el('input', {
+    type: 'checkbox', id: 'client-sms-opt-in', checked: Boolean(Number(client?.sms_opt_in || 0)),
+  });
+
   const fields = {
     first_name: field({ name: 'first_name', label: 'First name', required: true, value: client?.first_name || '', autocomplete: 'off' }),
     last_name: field({ name: 'last_name', label: 'Last name', required: true, value: client?.last_name || '', autocomplete: 'off' }),
@@ -121,17 +150,21 @@ async function openClientDialog(client, onDone) {
     }),
     email: field({ name: 'email', label: 'Email address', type: 'email', value: client?.email || '' }),
     phone: field({ name: 'phone', label: 'Phone', type: 'tel', value: client?.phone || '' }),
-    counselor_id: field({
-      name: 'counselor_id', label: 'Counselor', type: 'select',
-      value: client?.counselor_id || (session.user?.role === 'vrc' ? session.user.id : ''),
-      options: [{ value: '', label: 'Unassigned' },
-        ...usersResponse.data.map((u) => ({ value: u.id, label: u.full_name }))],
+    mobile: field({
+      name: 'mobile', label: 'Mobile, for text reminders', type: 'tel', value: client?.mobile || '',
+      help: 'Only used if the box below is ticked and text messages are switched on in Settings.',
     }),
+    ...(canChooseCounselor ? {
+      counselor_id: field({
+        name: 'counselor_id', label: 'Counselor', type: 'select',
+        value: client?.counselor_id || '',
+        options: [{ value: '', label: 'Unassigned' }, ...counselorOptions],
+      }),
+    } : {}),
     program_id: field({
       name: 'program_id', label: 'Program', type: 'select',
       value: client?.program_id || '',
-      options: [{ value: '', label: 'None' },
-        ...programsResponse.data.map((p) => ({ value: p.id, label: p.name }))],
+      options: [{ value: '', label: 'None' }, ...programOptions],
     }),
     notes: field({ name: 'notes', label: 'Notes', type: 'textarea', value: client?.notes || '' }),
   };
@@ -142,8 +175,20 @@ async function openClientDialog(client, onDone) {
     body: el('div', {}, [
       el('div', { class: 'form-grid' }, [fields.first_name, fields.last_name]),
       el('div', { class: 'form-grid' }, [fields.external_ref, fields.email]),
-      el('div', { class: 'form-grid' }, [fields.phone, fields.counselor_id]),
-      fields.program_id,
+      el('div', { class: 'form-grid' }, [fields.phone, fields.mobile]),
+      el('label', { class: 'checkbox', for: 'client-sms-opt-in' }, [
+        smsConsent,
+        el('span', {}, [
+          'This person has agreed to receive text messages',
+          el('span', {
+            class: 'option-help',
+            text: 'Having a mobile number is not consent. Tick this only if they have said yes.',
+          }),
+        ]),
+      ]),
+      canChooseCounselor
+        ? el('div', { class: 'form-grid' }, [fields.counselor_id, fields.program_id])
+        : fields.program_id,
       fields.notes,
     ]),
     actions: [
@@ -159,6 +204,7 @@ async function openClientDialog(client, onDone) {
             const value = f.control.value.trim?.() ?? f.control.value;
             body[key] = value === '' ? null : value;
           }
+          body.sms_opt_in = smsConsent.checked;
 
           try {
             if (client) await api.updateClient(client.id, body);

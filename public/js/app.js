@@ -152,7 +152,15 @@ function matchRoute(path) {
 
     for (let i = 0; i < routeSegments.length; i += 1) {
       if (routeSegments[i].startsWith(':')) {
-        params[routeSegments[i].slice(1)] = decodeURIComponent(segments[i]);
+        // A hand-typed or truncated address can hold a broken escape such
+        // as "%E0", and decodeURIComponent throws on those. That is an
+        // address with nothing behind it, not a crash.
+        try {
+          params[routeSegments[i].slice(1)] = decodeURIComponent(segments[i]);
+        } catch {
+          matched = false;
+          break;
+        }
       } else if (routeSegments[i] !== segments[i]) {
         matched = false;
         break;
@@ -288,15 +296,25 @@ function buildShell() {
   clear(root).append(shell);
   renderNav();
 
-  // Installed once, with the shell. Nothing here is destructive: every
-  // shortcut either moves you or opens help.
-  installShortcuts({
-    navigate: (path) => { window.location.hash = `#/${path}`; },
-    showHelp,
-    can,
-    announce,
-  });
+  // Installed once for the life of the page, not once per sign-in. The shell
+  // is rebuilt every time somebody signs in, and each rebuild used to add
+  // another listener: after signing out and back in, pressing ? opened the
+  // help twice, and the shortcuts kept working on the sign-in page with
+  // nobody signed in at all.
+  if (!shortcutsInstalled) {
+    shortcutsInstalled = true;
+
+    installShortcuts({
+      navigate: (path) => { window.location.hash = `#/${path}`; },
+      showHelp,
+      can,
+      announce,
+      active: () => Boolean(session.user),
+    });
+  }
 }
+
+let shortcutsInstalled = false;
 
 /**
  * Show or hide the "Skip to search" link to match the screen.
@@ -390,7 +408,12 @@ function renderNav() {
 }
 
 function currentPath() {
-  return window.location.hash.replace(/^#\/?/, '') || 'dashboard';
+  // The part after "?" belongs to the screen, not the router: the dashboard
+  // links to "#/loans?status=overdue" and the loans screen reads that filter
+  // itself. Matching on the whole string meant no route was called
+  // "loans?status=overdue", so every one of those dashboard links opened
+  // "Page not found".
+  return window.location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard';
 }
 
 /** Refresh the counts shown as nav badges. Failure here is not worth surfacing. */
