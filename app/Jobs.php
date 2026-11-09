@@ -439,7 +439,9 @@ final class Jobs
     {
         $token = Config::cronToken();
         $base  = rtrim((string) ($baseUrl ?: ''), '/');
-        $url   = ($base !== '' ? $base : 'https://your-site.example') . '/api/v1/jobs/run?token=' . $token;
+        // No token in the address: it goes in the header, and a query string
+        // is written to every access log it passes through.
+        $url   = ($base !== '' ? $base : 'https://your-site.example') . '/api/v1/jobs/run';
 
         $php = PHP_BINARY !== '' && is_file(PHP_BINARY) ? PHP_BINARY : 'php';
 

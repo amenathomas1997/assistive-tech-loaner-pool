@@ -297,7 +297,12 @@ final class Mailer
                     $eventType,
                     mb_substr($recipient, 0, 500),
                     mb_substr($subject, 0, 255),
-                    mb_substr(trim(preg_replace('/\s+/', ' ', strip_tags((string) ($message['html'] ?? ''))) ?? ''), 0, 2000),
+                    // A reset email's body is the reset link, and password_resets
+                    // stores only a hash of it precisely so that the database
+                    // cannot be used to take over an account.
+                    empty($message['sensitive'])
+                        ? mb_substr(trim(preg_replace('/\s+/', ' ', strip_tags((string) ($message['html'] ?? ''))) ?? ''), 0, 2000)
+                        : '(not recorded: this message contains a sign-in link)',
                     $message['loanId'] ?? null,
                     $message['requestId'] ?? null,
                     $status,
@@ -322,14 +327,14 @@ final class Mailer
         $heading = Util::escapeHtml($heading);
 
         return <<<HTML
-            <!doctype html><html><body style="margin:0;padding:0;background:#f4f5f7;
+            <!doctype html><html lang="en"><head><meta charset="utf-8"><title>{$heading}</title></head><body style="margin:0;padding:0;background:#f4f5f7;
               font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1a1a1a;">
               <div style="max-width:600px;margin:0 auto;padding:24px;">
                 <div style="background:#fff;border-radius:8px;padding:24px;border:1px solid #e1e3e6;">
                   <h1 style="margin:0 0 16px;font-size:20px;line-height:1.3;color:#125b7d;">{$heading}</h1>
                   {$bodyHtml}
                 </div>
-                <p style="font-size:12px;color:#6b7280;margin:16px 0 0;text-align:center;">
+                <p style="font-size:14px;color:#3f4650;margin:16px 0 0;text-align:center;">
                   Sent automatically by Loaner Pool.
                 </p>
               </div>
@@ -359,9 +364,9 @@ final class Mailer
             <p>Someone asked to reset the Loaner Pool password for this address.
                If it was you, use the link below. It stops working in one hour.</p>
             {$button}
-            <p style="font-size:13px;color:#666;">If the button does not work, copy this address into your browser:<br>
+            <p style="font-size:14px;color:#3f4650;">If the button does not work, copy this address into your browser:<br>
               <span style="word-break:break-all;">{$safe}</span></p>
-            <p style="font-size:13px;color:#666;">If you did not ask for this, you can ignore this message —
+            <p style="font-size:14px;color:#3f4650;">If you did not ask for this, you can ignore this message —
                your password has not changed.</p>
             HTML);
 
@@ -373,6 +378,7 @@ final class Mailer
                 'subject'   => 'Reset your Loaner Pool password',
                 'html'      => $html,
                 'eventType' => 'password_reset',
+                'sensitive' => true,
             ],
         );
     }
@@ -383,7 +389,7 @@ final class Mailer
         return Db::all(
             'SELECT id, event_type, recipient, subject, status, error_message, sent_at, created_at
                FROM email_log WHERE organization_id = ?
-              ORDER BY created_at DESC LIMIT ' . (int) $limit,
+              ORDER BY created_at DESC LIMIT ' . max(1, min(200, $limit)),
             [$organizationId],
         );
     }

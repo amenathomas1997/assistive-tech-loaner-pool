@@ -194,6 +194,11 @@ checks.push(
   { what: 'light: white label on primary button, dark end', fg: WHITE, bg: hexOf(light, '--brand-strong'), min: AAA_NORMAL },
   { what: 'light: white on header, lightest stop', fg: WHITE, bg: hexOf(light, '--brand-bright'), min: AAA_NORMAL },
   { what: 'light: white on header, darkest stop', fg: WHITE, bg: hexOf(light, '--brand-strong'), min: AAA_NORMAL },
+  // So are the header buttons, which were a white veil and read 5.34:1.
+  {
+    what: 'light: label on a header button',
+    fg: WHITE, bg: over([0, 0, 0], 0.25, hexOf(light, '--brand-bright')), min: AAA_NORMAL,
+  },
   // The avatar chip is a black veil over the header's lightest stop.
   {
     what: 'light: initials on the avatar chip',

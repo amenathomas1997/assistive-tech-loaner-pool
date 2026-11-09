@@ -87,7 +87,9 @@ final class Response
         header('Content-Length: ' . (string) filesize($path));
         header('Content-Disposition: inline; filename="' . $filename . '"');
         header('X-Content-Type-Options: nosniff');
-        header('Cache-Control: private, max-age=3600');
+        // Condition photos and signatures, on what is often a shared computer.
+        // Not left in the disk cache for the next person at the desk.
+        header('Cache-Control: no-store');
 
         readfile($path);
         exit;

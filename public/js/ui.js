@@ -405,6 +405,9 @@ export function clearErrors(fieldsByName) {
 /** Disable a button and show a spinner while an async action runs. */
 export async function withBusy(button, label, fn) {
   const original = button.textContent;
+  // Disabling the focused element drops focus to the page, so somebody at the
+  // keyboard would land back at the top after a failed save.
+  const hadFocus = document.activeElement === button;
   button.disabled = true;
   button.setAttribute('aria-busy', 'true');
   clear(button).append(el('span', { class: 'spinner', 'aria-hidden': 'true' }), ` ${label}`);
@@ -415,6 +418,8 @@ export async function withBusy(button, label, fn) {
     button.disabled = false;
     button.removeAttribute('aria-busy');
     button.textContent = original;
+    // Only if nothing else claimed it: a validation error moves focus to the field.
+    if (hadFocus && button.isConnected && document.activeElement === document.body) button.focus();
   }
 }
 

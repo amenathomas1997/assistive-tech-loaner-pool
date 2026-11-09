@@ -76,6 +76,10 @@ final class Repairs
 
     public static function decorate(array $row): array
     {
+        // A DECIMAL column arrives as a string, and every screen formats this
+        // as a number: one costed repair took the whole repairs list down.
+        $row['cost'] = $row['cost'] === null ? null : (float) $row['cost'];
+
         $row['status_label'] = self::STATUS_LABELS[$row['status']] ?? $row['status'];
         $row['is_open']      = !in_array($row['status'], self::CLOSED, true);
 
@@ -107,6 +111,16 @@ final class Repairs
                 throw Util::notFound('That device does not exist.');
             }
 
+            if (in_array($device['status'], ['retired', 'lost'], true)) {
+                throw Util::conflict(
+                    "{$device['name']} is marked \"{$device['status']}\". Change that first if it is "
+                    . 'back in service; closing a repair would otherwise put it back in stock.',
+                    ['status' => $device['status']],
+                );
+            }
+
+            Loans::assertBelongs('users', $input['assignedTo'] ?? null, $organizationId, 'assignee');
+
             $existing = Db::one(
                 'SELECT reference FROM repairs
                   WHERE device_id = ? AND status NOT IN ("repaired", "unrepairable", "cancelled")',
@@ -135,9 +149,9 @@ final class Repairs
                             $activeLoan['id'] ?? null, $fault,
                             Util::str($input['vendor'] ?? null, 190),
                             Util::str($input['vendorRef'] ?? null, 120),
-                            $input['cost'] ?? null,
+                            Util::decimal($input['cost'] ?? null, 'cost'),
                             Util::bool($input['underWarranty'] ?? false) ? 1 : 0,
-                            $actorId, $input['assignedTo'] ?? null,
+                            $actorId, ($input['assignedTo'] ?? null) ?: null,
                         ],
                     );
 
@@ -173,6 +187,10 @@ final class Repairs
                 'actorId'         => $actorId,
             ]);
         }
+
+        // A device promised to someone on the waitlist is not going to be
+        // collected now. They go back in the queue, keeping their place.
+        Reservations::releaseHoldsOnDevice($organizationId, (int) $created['device']['id']);
 
         Db::execute(
             'UPDATE devices SET status = CASE WHEN status = "checked_out" THEN status ELSE "maintenance" END,
@@ -213,7 +231,7 @@ final class Repairs
                 throw Util::notFound('That repair does not exist.');
             }
 
-            $newStatus = $input['status'] ?? null;
+            $newStatus = Util::str($input['status'] ?? null, 32);
 
             if ($newStatus !== null && !in_array($newStatus, self::STATUSES, true)) {
                 throw Util::badRequest(
@@ -258,16 +276,17 @@ final class Repairs
                 $params[] = Util::bool($input['underWarranty']) ? 1 : 0;
             }
             if (array_key_exists('assignedTo', $input)) {
+                Loans::assertBelongs('users', $input['assignedTo'], $organizationId, 'assignee');
                 $sets[]   = 'assigned_to = ?';
                 $params[] = $input['assignedTo'] ?: null;
             }
             if (array_key_exists('sentAt', $input)) {
                 $sets[]   = 'sent_at = ?';
-                $params[] = Util::mysqlDateTime($input['sentAt'] ?: null);
+                $params[] = Util::mysqlDateTime(Util::dateTime($input['sentAt'], 'sent_at'));
             }
             if (array_key_exists('returnedAt', $input)) {
                 $sets[]   = 'returned_at = ?';
-                $params[] = Util::mysqlDateTime($input['returnedAt'] ?: null);
+                $params[] = Util::mysqlDateTime(Util::dateTime($input['returnedAt'], 'returned_at'));
             }
 
             $statusChanged = $newStatus !== null && $newStatus !== $repair['status'];
@@ -358,7 +377,8 @@ final class Repairs
         }
 
         // Promote anyone waiting, now the device is back.
-        if ($result['statusChanged'] && $result['newStatus'] === 'repaired') {
+        // Any close that leaves the device available, "cancelled" included.
+        if ($result['statusChanged'] && in_array($result['newStatus'], ['repaired', 'cancelled'], true)) {
             try {
                 Reservations::promoteNextForDevice($actor, $organizationId, (int) $after['device_id']);
             } catch (\Throwable $e) {

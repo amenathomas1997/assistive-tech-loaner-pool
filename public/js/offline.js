@@ -132,7 +132,9 @@ export async function flushQueue(send, { onProgress = null } = {}) {
 
       // A 4xx will never succeed on retry — the state it assumed has changed.
       // A network error will, so leave it pending.
-      const permanent = err.status && err.status >= 400 && err.status < 500;
+      // 401 is the session, not the scan. It comes right once somebody signs
+    // back in, and treating it as final threw away every queued return.
+    const permanent = err.status && err.status >= 400 && err.status < 500 && err.status !== 401;
 
       if (permanent || entry.attempts >= 5) {
         entry.status = 'failed';

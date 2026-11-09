@@ -105,6 +105,7 @@ final class OutcomeRoutes
         $result = Outcomes::outstanding((int) $request->auth['organizationId'], [
             'limit'  => $pagination['limit'],
             'offset' => $pagination['offset'],
+            'counselorId' => Auth::ownRecordsOnly($request->auth),
         ]);
 
         Response::json(Util::paged($result['rows'], $result['total'], $pagination)
@@ -189,6 +190,7 @@ final class OutcomeRoutes
             'filename'       => Util::str($body['filename'] ?? null, 255),
             'dryRun'         => Util::bool($body['dry_run'] ?? $body['dryRun'] ?? false),
             'updateExisting' => Util::bool($body['update_existing'] ?? $body['updateExisting'] ?? true, true),
+            'restrictToCounselor' => Auth::ownRecordsOnly($request->auth),
         ]));
     }
 

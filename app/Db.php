@@ -133,6 +133,13 @@ final class Db
     private static function normalise(array $params): array
     {
         foreach ($params as $key => $value) {
+            // JSON lets a client send a list anywhere. Nothing that reaches a
+            // placeholder is meant to be one, and PDO would warn and store
+            // the word "Array".
+            if (is_array($value)) {
+                throw Util::badRequest('A list was sent where a single value was expected.');
+            }
+
             if (is_bool($value)) {
                 $params[$key] = $value ? 1 : 0;
             } elseif ($value instanceof \DateTimeInterface) {
@@ -245,6 +252,41 @@ final class Db
             str_contains($message, 'timed out')
                 => 'Timed out connecting to the database. If the host is remote, its firewall may be blocking this server.',
             default => $message,
+        };
+    }
+
+    /**
+     * What to tell the client when a write was refused because of the value.
+     *
+     * Validation is the first line of defence and most fields have it, but the
+     * schema is the last one, and when it is the schema that says no the
+     * request is at fault rather than the server: a 400 naming the field, not
+     * a 500 and a reference number. Returns null for anything else, which
+     * really is a fault and goes to the log.
+     *
+     * @return array{status:int, code:string, message:string, details:?array}|null
+     */
+    public static function clientError(\Throwable $e): ?array
+    {
+        if (!$e instanceof PDOException) {
+            return null;
+        }
+
+        $field = preg_match("/column [`']?(?:[^`']+[`']?\\.[`']?)*([a-z_]+)[`']?/i", $e->getMessage(), $m)
+            ? $m[1] : null;
+        $details = $field !== null ? ['field' => $field] : null;
+
+        return match ($e->errorInfo[1] ?? null) {
+            1048 => ['status' => 400, 'code' => 'bad_request', 'details' => $details,
+                     'message' => ($field !== null ? "\"{$field}\"" : 'A required value') . ' cannot be empty.'],
+            1452 => ['status' => 400, 'code' => 'bad_request', 'details' => null,
+                     'message' => 'That refers to something that does not exist.'],
+            1264, 1265, 1292, 1366, 1406 => ['status' => 400, 'code' => 'bad_request', 'details' => $details,
+                     'message' => 'That value is not valid here'
+                                  . ($field !== null ? " (\"{$field}\")" : '') . '.'],
+            1205, 1213 => ['status' => 503, 'code' => 'busy', 'details' => null,
+                     'message' => 'Someone else was changing the same record. Nothing was saved. Try again.'],
+            default => null,
         };
     }
 

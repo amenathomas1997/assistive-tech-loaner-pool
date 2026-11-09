@@ -54,6 +54,14 @@ header(
     . "form-action 'self'"
 );
 
+// Client records, on what is often a shared computer. Routes that hand out a
+// cacheable asset (a barcode image) set their own value after this. It covers
+// the installer's answers too: a 410 is cacheable by default, so a browser that
+// had seen "already installed" went on believing it after a reinstall began.
+if (str_starts_with($request->path, '/api/')) {
+    header('Cache-Control: no-store');
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -85,7 +93,9 @@ try {
             } catch (\Throwable $e) {
                 $status['ok']             = false;
                 $status['database']       = 'unreachable';
-                $status['database_error'] = Db::describeError($e);
+                // The reason goes to the log. This endpoint answers anyone, and
+                // the driver's message can name the host and the user.
+                error_log('[health] database unreachable: ' . $e->getMessage());
                 Response::json($status, 503);
             }
         }
@@ -151,7 +161,6 @@ try {
         header('Cache-Control: no-store');
         echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
             . '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            . '<meta http-equiv="refresh" content="15">'
             . '<title>Updating — Loaner Pool</title><style>'
             . 'body{font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1a2230;'
             . 'background:#f4f6f9;margin:0;display:grid;place-items:center;min-height:100vh;padding:24px}'
@@ -163,7 +172,7 @@ try {
             . '<h1>The loaner pool is being updated</h1>'
             . '<p>This usually takes well under a minute. Nothing has been lost — devices, loans and '
             . 'photos are untouched.</p>'
-            . '<p>This page checks again every 15 seconds.</p>'
+            . '<p><a href="">Check again</a></p>'
             . '</main></body></html>';
         exit;
     }
@@ -176,7 +185,6 @@ try {
             410,
             'already_installed',
             'This Loaner Pool is already installed. To reinstall, remove the configuration file on the server first.',
-            ['config_path' => Config::path()],
         );
     }
 
@@ -225,6 +233,17 @@ try {
 } catch (HttpError $e) {
     Response::error($e->status, $e->errorCode, $e->getMessage(), $e->details);
 } catch (\Throwable $e) {
+    // The database refusing a value is the request's fault, not the server's.
+    $refused = Db::clientError($e);
+
+    if ($refused !== null) {
+        if ($refused['status'] === 503) {
+            header('Retry-After: 1');
+        }
+
+        Response::error($refused['status'], $refused['code'], $refused['message'], $refused['details']);
+    }
+
     // Anything unexpected becomes a generic 500 with a reference, so a stack
     // trace or SQL fragment never reaches a client. The real detail goes to
     // the server log where an administrator can find it by that reference.

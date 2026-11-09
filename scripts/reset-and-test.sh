@@ -163,6 +163,12 @@ echo "==> Running custody suite"
 ./scripts/e2e-custody.sh "http://localhost:$PORT"
 CUSTODY_RESULT=$?
 
+# Caseload confidentiality, device status integrity, and what bad input gets
+# back. See the header of that file.
+echo "==> Running boundary suite"
+./scripts/e2e-boundaries.sh "http://localhost:$PORT"
+BOUNDARY_RESULT=$?
+
 echo "==> Checking the API/UI contract"
 ./scripts/verify-ui-contract.sh "http://localhost:$PORT"
 CONTRACT_RESULT=$?
@@ -205,6 +211,7 @@ if [ "$RESULT" -eq 0 ]; then RESULT=$FEATURE_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$WAVE3_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$COVERAGE_SUITE_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$CUSTODY_RESULT; fi
+if [ "$RESULT" -eq 0 ]; then RESULT=$BOUNDARY_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$INSTALL_CHECKS; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRACT_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRAST_RESULT; fi

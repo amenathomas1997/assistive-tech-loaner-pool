@@ -68,7 +68,11 @@ final class DeviceRoutes
             'sort'   => $request->queryParam('sort'),
         ]);
 
-        Response::json(Util::paged($result['rows'], $result['total'], $pagination));
+        Response::json(Util::paged(
+            Devices::redactHolders($auth, $result['rows']),
+            $result['total'],
+            $pagination,
+        ));
     }
 
     public static function facets(Request $request): never
@@ -86,13 +90,25 @@ final class DeviceRoutes
         }
 
         Response::json([
-            'device'      => $device,
+            'device'      => Devices::redactHolders($request->auth, [$device])[0],
             'accessories' => Kits::accessories($organizationId, (int) $device['id']),
-            'waitlist'    => Reservations::forDevice($organizationId, (int) $device['id']),
-            'history'     => Audit::search($organizationId, [
-                'entityType' => 'device',
-                'entityId'   => (int) $device['id'],
-            ], 20)['rows'],
+            // The device screen is built around this. A counselor gets the
+            // loans on their own caseload, the same as the loans list.
+            'loan_history' => \Loaner\Loans::list($organizationId, array_filter([
+                'deviceId'    => (int) $device['id'],
+                'counselorId' => Auth::ownRecordsOnly($request->auth),
+            ], static fn ($v): bool => $v !== null), ['limit' => 100, 'offset' => 0])['rows'],
+            'waitlist'    => Reservations::visibleOnly(
+                $request->auth,
+                Reservations::forDevice($organizationId, (int) $device['id']),
+            ),
+            // The audit trail has its own permission, and it names people.
+            'history'     => in_array('audit.read', $request->auth['capabilities'] ?? [], true)
+                ? Audit::search($organizationId, [
+                    'entityType' => 'device',
+                    'entityId'   => (int) $device['id'],
+                ], 20)['rows']
+                : [],
         ]);
     }
 
@@ -108,7 +124,10 @@ final class DeviceRoutes
             throw Util::notFound("No device matches \"{$code}\".");
         }
 
-        Response::json(['device' => Devices::get($organizationId, (int) $device['id'])]);
+        Response::json(['device' => Devices::redactHolders(
+            $request->auth,
+            [Devices::get($organizationId, (int) $device['id'])],
+        )[0]]);
     }
 
     public static function create(Request $request): never

@@ -158,6 +158,30 @@ final class Directory
         return self::client($organizationId, $id);
     }
 
+    /**
+     * Refuse a counselor naming a client outside their caseload.
+     *
+     * The response to creating a request or waitlist entry echoes the client's
+     * name, so accepting any id would be a way of reading any client. Answered
+     * the way a missing client is answered, so it does not confirm one exists.
+     */
+    public static function assertInCaseload(?array $auth, mixed $clientId): void
+    {
+        $counselor = Auth::ownRecordsOnly($auth);
+
+        if ($counselor === null || empty($clientId)) {
+            return;
+        }
+
+        $mine = is_scalar($clientId) && ctype_digit((string) $clientId)
+            ? Db::value('SELECT id FROM clients WHERE id = ? AND counselor_id = ?', [$clientId, $counselor])
+            : null;
+
+        if ($mine === null) {
+            throw Util::badRequest('That client does not exist.', ['field' => 'client_id']);
+        }
+    }
+
     public static function updateClient(?array $actor, int $organizationId, int $clientId, array $input): array
     {
         $before = self::client($organizationId, $clientId);
@@ -193,9 +217,11 @@ final class Directory
             $sets[]   = 'email = ?';
             $params[] = Util::email($input['email'], 'email');
         }
-        foreach ([['counselor_id', 'counselorId'], ['program_id', 'programId']] as [$column, $camel]) {
+        foreach ([['counselor_id', 'counselorId', 'users', 'counselor'],
+                  ['program_id', 'programId', 'programs', 'program']] as [$column, $camel, $table, $label]) {
             foreach ([$column, $camel] as $key) {
                 if (array_key_exists($key, $input)) {
+                    Loans::assertBelongs($table, $input[$key], $organizationId, $label);
                     $sets[]   = "{$column} = ?";
                     $params[] = $input[$key] ?: null;
                     break;

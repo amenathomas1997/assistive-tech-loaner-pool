@@ -86,12 +86,18 @@ address, and the real one is in the `X-Forwarded-For` header.
 
 That header is **not believed by default**, because any visitor can send one.
 On a host with no proxy, trusting it would let anyone write any address into
-the audit log. If you do have a proxy, say so — in `public/.htaccess`, or the
-control panel's environment editor:
+the audit log. If you do have a proxy, say so by adding this line inside the
+outer braces of `data/config.json`:
 
-```apache
-SetEnv LOANER_TRUST_PROXY 1
+```json
+"trustProxy": true,
 ```
+
+Use that file rather than `public/.htaccess`. `.htaccess` is part of the
+application, so an edit there makes `bin/update.php` refuse to run (on a git
+install) or gets overwritten (on an archive install). Setting
+`LOANER_TRUST_PROXY=1` in the vhost or the FPM pool also works, if your host
+gives you those.
 
 The symptom of needing this is every entry in Settings → Audit log showing the
 same address. The symptom of setting it without a proxy is an audit log the
@@ -435,7 +441,7 @@ Useful environment variables:
 | Variable | Default | Purpose |
 |---|---|---|
 | `LOANER_CONFIG` | `<project>/data/config.json` | Configuration file location. Set it to move the credentials anywhere you like. |
-| `LOANER_TRUST_PROXY` | enabled | Honours `X-Forwarded-For` for the address recorded in the audit log. Set to `0` when PHP is exposed directly, or a client can forge its own audit entries. |
+| `LOANER_TRUST_PROXY` | off | Set to `1` to honour `X-Forwarded-For` for the address recorded in the audit log. Only behind a proxy you control: otherwise a client can forge its own audit entries. The `trustProxy` key in `data/config.json` does the same thing. |
 
 Set these with `SetEnv` in `.htaccess`, in the vhost, or in the FPM pool
 configuration — whichever your host allows.

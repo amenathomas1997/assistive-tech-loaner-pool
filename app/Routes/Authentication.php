@@ -359,6 +359,7 @@ final class Authentication
     // -----------------------------------------------------------------------
 
     private const RESET_LIFETIME_MINUTES = 60;
+    private const RESET_THROTTLE_MINUTES = 5;
 
     public static function forgotPassword(Request $request): never
     {
@@ -380,6 +381,19 @@ final class Authentication
         }
 
         // Invalidate any outstanding link, so a forwarded old email is useless.
+        // One message per mailbox every few minutes, however often the form is
+        // submitted: nothing else stands between this unauthenticated endpoint
+        // and somebody's inbox. The answer is the same either way.
+        $recent = Db::value(
+            'SELECT id FROM password_resets
+              WHERE user_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL ? MINUTE) LIMIT 1',
+            [$user['id'], self::RESET_THROTTLE_MINUTES],
+        );
+
+        if ($recent !== null) {
+            Response::json($generic);
+        }
+
         Db::execute('DELETE FROM password_resets WHERE user_id = ? AND used_at IS NULL', [$user['id']]);
 
         $token     = Util::randomToken(32);
@@ -453,12 +467,26 @@ final class Authentication
             );
         }
 
+        // Claimed before it is spent, so a link can only ever be used once even
+        // if it is submitted twice at the same moment.
+        $claimed = Db::execute(
+            'UPDATE password_resets SET used_at = NOW() WHERE id = ? AND used_at IS NULL',
+            [$record['id']],
+        );
+
+        if ($claimed !== 1) {
+            throw Util::badRequest(
+                'That reset link is not valid. It may have expired, already been used, or been '
+                . 'replaced by a newer one. Request a fresh link and try again.',
+                ['field' => 'token'],
+            );
+        }
+
         Db::execute(
             'UPDATE users SET password_hash = ?, must_change_password = 0, failed_logins = 0,
                     locked_until = NULL, updated_at = NOW() WHERE id = ?',
             [Auth::hashPassword($new), $record['user_id']],
         );
-        Db::execute('UPDATE password_resets SET used_at = NOW() WHERE id = ?', [$record['id']]);
 
         // Everything else signed in as this account is now suspect.
         Auth::destroyAllSessionsForUser((int) $record['user_id']);

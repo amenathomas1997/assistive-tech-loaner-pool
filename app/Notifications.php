@@ -172,7 +172,7 @@ final class Notifications
                 continue;
             }
             $rows .= '<tr>'
-                . '<td style="padding:6px 12px 6px 0;color:#6b7280;font-size:14px;vertical-align:top;'
+                . '<td style="padding:6px 12px 6px 0;color:#3f4650;font-size:14px;vertical-align:top;'
                 . 'white-space:nowrap;">' . Util::escapeHtml($label) . '</td>'
                 . '<td style="padding:6px 0;font-size:14px;font-weight:600;">' . Util::escapeHtml((string) $value) . '</td>'
                 . '</tr>';
@@ -246,7 +246,7 @@ final class Notifications
                 ])
                 . (!empty($r['review_notes'])
                     ? '<p style="font-size:14px;">' . Util::escapeHtml($r['review_notes']) . '</p>' : '')
-                . '<p style="font-size:14px;color:#6b7280;">You will be notified again when the device is ready.</p>'
+                . '<p style="font-size:14px;color:#3f4650;">You will be notified again when the device is ready.</p>'
                 . self::link($r, "/#/requests/{$r['id']}", 'Track this request')),
         ];
     }

@@ -78,11 +78,15 @@ final class Reports
         $total     = (int) $devices['total'];
         $checkedOut = (int) $devices['checked_out'];
 
+        // Equipment that has been written off is not available to be used, so
+        // it does not count against how much of the pool is being used.
+        $inService = $total - (int) $devices['retired'] - (int) $devices['lost'];
+
         return [
             // Utilisation belongs on the device block: it is a property of the
             // pool, and the dashboard reads it from there.
             'devices' => array_map('intval', $devices) + [
-                'utilisation_percent' => $total === 0 ? 0.0 : round($checkedOut / $total * 100, 1),
+                'utilisation_percent' => $inService <= 0 ? 0.0 : round($checkedOut / $inService * 100, 1),
             ],
             'loans'   => array_map('intval', $loans),
             'requests' => array_map('intval', $requests),
@@ -134,7 +138,7 @@ final class Reports
                     SUM(l.extension_count > 0) AS extended,
                     COUNT(DISTINCT l.device_id) AS distinct_devices,
                     COUNT(DISTINCT l.client_id) AS distinct_clients,
-                    AVG(CASE WHEN l.returned_at IS NOT NULL
+                    AVG(CASE WHEN l.status = 'returned'
                              THEN TIMESTAMPDIFF(DAY, l.checked_out_at, l.returned_at) END) AS avg_days_out,
                     SUM(l.status = 'returned' AND l.due_at IS NOT NULL AND l.returned_at > l.due_at)
                         AS returned_late
@@ -349,7 +353,7 @@ final class Reports
                              THEN TIMESTAMPDIFF(DAY, l.checked_out_at, l.returned_at) END)
                         AS avg_loan_days
                FROM loans l JOIN devices d ON d.id = l.device_id
-              WHERE l.organization_id = ? AND l.checked_out_at >= ? AND l.checked_out_at <= ?
+              WHERE l.organization_id = ? AND l.checked_out_at >= ? AND l.checked_out_at <= ? AND l.status <> "cancelled"
               GROUP BY COALESCE(d.category, "Uncategorised")',
             [$organizationId, $fromSql, $toSql],
         );
@@ -481,7 +485,7 @@ final class Reports
                         AS avg_loan_days,
                     MAX(l.checked_out_at) AS last_loan_at
                FROM loans l {$join}
-              WHERE l.organization_id = ? AND l.checked_out_at >= ? AND l.checked_out_at <= ?
+              WHERE l.organization_id = ? AND l.checked_out_at >= ? AND l.checked_out_at <= ? AND l.status <> 'cancelled'
                     {$scope}
               GROUP BY {$idColumn}, {$label}
               ORDER BY loan_count DESC
@@ -516,7 +520,7 @@ final class Reports
         $issued = Db::all(
             'SELECT DATE_FORMAT(checked_out_at, "%Y-%m") AS period, COUNT(*) AS loan_count
                FROM loans
-              WHERE organization_id = ?
+              WHERE organization_id = ? AND status <> "cancelled"
                 AND checked_out_at >= DATE_SUB(DATE_FORMAT(NOW(), "%Y-%m-01"), INTERVAL ? MONTH)
               GROUP BY period ORDER BY period',
             [$organizationId, $months - 1],
@@ -529,7 +533,7 @@ final class Reports
             'SELECT DATE_FORMAT(returned_at, "%Y-%m") AS period, COUNT(*) AS loan_count,
                     SUM(due_at IS NOT NULL AND returned_at > due_at) AS late_count
                FROM loans
-              WHERE organization_id = ? AND returned_at IS NOT NULL
+              WHERE organization_id = ? AND status = "returned"
                 AND returned_at >= DATE_SUB(DATE_FORMAT(NOW(), "%Y-%m-01"), INTERVAL ? MONTH)
               GROUP BY period ORDER BY period',
             [$organizationId, $months - 1],
@@ -800,7 +804,7 @@ final class Reports
                     SUM(checkout_method = "api")     AS api,
                     SUM(checkout_method = "request") AS request
                FROM loans
-              WHERE organization_id = ? AND checked_out_at >= ? AND checked_out_at <= ?',
+              WHERE organization_id = ? AND status <> "cancelled" AND checked_out_at >= ? AND checked_out_at <= ?',
             [$organizationId, $fromSql, $toSql],
         );
 
@@ -810,7 +814,7 @@ final class Reports
                     SUM(checkin_method = "manual") AS manual,
                     SUM(checkin_method = "api")    AS api
                FROM loans
-              WHERE organization_id = ? AND returned_at IS NOT NULL
+              WHERE organization_id = ? AND status = "returned"
                 AND returned_at >= ? AND returned_at <= ?',
             [$organizationId, $fromSql, $toSql],
         );

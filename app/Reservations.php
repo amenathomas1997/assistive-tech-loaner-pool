@@ -288,7 +288,8 @@ final class Reservations
         foreach ($stale as $row) {
             Db::transaction(static function () use ($row): void {
                 Db::execute(
-                    'UPDATE reservations SET status = "expired", closed_at = NOW(), updated_at = NOW() WHERE id = ?',
+                    'UPDATE reservations SET status = "expired", closed_at = NOW(), updated_at = NOW()
+                      WHERE id = ? AND status = "ready"',
                     [$row['id']],
                 );
                 if ($row['ready_device_id'] !== null) {
@@ -508,6 +509,36 @@ final class Reservations
     }
 
     /** Anyone waiting on a given device or its category, for the device screen. */
+    /** A counselor sees the waitlist entries they made, and no one else's clients. */
+    public static function visibleOnly(?array $auth, array $rows): array
+    {
+        $counselor = Auth::ownRecordsOnly($auth);
+        if ($counselor === null) {
+            return $rows;
+        }
+
+        return array_values(array_filter(
+            $rows,
+            static fn (array $r): bool => (int) $r['requested_by'] === $counselor,
+        ));
+    }
+
+    /**
+     * Put a promised device's entry back in the queue, because the device has
+     * just stopped being available: it went for repair. The person keeps their
+     * place and is promoted again when it comes back.
+     */
+    public static function releaseHoldsOnDevice(int $organizationId, int $deviceId): void
+    {
+        foreach (Db::all(
+            'SELECT id FROM reservations
+              WHERE organization_id = ? AND status = "ready" AND ready_device_id = ?',
+            [$organizationId, $deviceId],
+        ) as $row) {
+            self::releaseHold($organizationId, (int) $row['id']);
+        }
+    }
+
     public static function forDevice(int $organizationId, int $deviceId): array
     {
         $device = Db::one('SELECT category FROM devices WHERE id = ? AND organization_id = ?', [$deviceId, $organizationId]);

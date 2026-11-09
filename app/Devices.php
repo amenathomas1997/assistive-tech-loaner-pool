@@ -115,6 +115,57 @@ final class Devices
         return $row;
     }
 
+    /**
+     * Take other people's clients out of device rows for a counselor.
+     *
+     * Anyone who can see the inventory can see that a device is out and when
+     * it is due. Who has it is a client record, so a counselor sees that only
+     * for their own caseload. Done as one query over the page, not per row.
+     *
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     */
+    public static function redactHolders(?array $auth, array $rows): array
+    {
+        $counselor = Auth::ownRecordsOnly($auth);
+        if ($counselor === null) {
+            return $rows;
+        }
+
+        $loanIds = array_values(array_filter(array_map(
+            static fn (array $d): int => (int) ($d['active_loan_id'] ?? 0),
+            $rows,
+        )));
+
+        $visible = [];
+        if ($loanIds !== []) {
+            $marks = implode(',', array_fill(0, count($loanIds), '?'));
+            foreach (Db::all(
+                "SELECT l.id FROM loans l
+                   LEFT JOIN clients c ON c.id = l.client_id
+                   LEFT JOIN loan_requests r ON r.id = l.request_id
+                  WHERE l.id IN ({$marks}) AND (c.counselor_id = ? OR r.requested_by = ?)",
+                [...$loanIds, $counselor, $counselor],
+            ) as $row) {
+                $visible[(int) $row['id']] = true;
+            }
+        }
+
+        foreach ($rows as &$device) {
+            if (empty($device['active_loan_id']) || isset($visible[(int) $device['active_loan_id']])) {
+                continue;
+            }
+            foreach (['active_loan_client_first_name', 'active_loan_client_last_name',
+                      'active_loan_tech_name', 'active_loan_program_name'] as $field) {
+                $device[$field] = null;
+            }
+            $device['current_holder'] = null;
+        }
+        unset($device);
+
+        return $rows;
+    }
+
     public static function list(int $organizationId, array $filters = [], array $options = []): array
     {
         $limit  = (int) ($options['limit'] ?? 50);
@@ -286,6 +337,14 @@ final class Devices
     }
 
     /** Fields an edit may change. Barcode is deliberately not among them. */
+    /**
+     * What a device can become when a loan ends. "checked_out" and "reserved"
+     * both claim something about a person, and neither would be true: the
+     * first would leave a device marked out with no loan, the second one
+     * marked held for nobody.
+     */
+    public const RETURN_STATUSES = ['available', 'maintenance', 'retired', 'lost'];
+
     private const EDITABLE = [
         'asset_tag', 'serial_number', 'name', 'category', 'manufacturer', 'model',
         'description', 'status', 'condition_note', 'location', 'home_location',
@@ -362,6 +421,21 @@ final class Devices
 
         if ($sets === []) {
             return $before;
+        }
+
+        // "On loan" is the result of a check-out, not something to type in.
+        if (($data['status'] ?? null) === 'checked_out' && empty($before['active_loan_id'])
+            && $before['status'] !== 'checked_out'
+        ) {
+            throw Util::conflict(
+                "{$before['name']} has no loan to be out on. Check it out to someone instead.",
+                ['field' => 'status'],
+            );
+        }
+
+        foreach ([['owner_program_id', 'ownerProgramId', 'programs', 'program'],
+                  ['site_id', 'siteId', 'sites', 'site']] as [$snake, $camel, $table, $label]) {
+            Loans::assertBelongs($table, $data[$snake] ?? $data[$camel] ?? null, $organizationId, $label);
         }
 
         // Changing status by hand must not contradict an active loan: a device
@@ -504,7 +578,7 @@ final class Devices
     {
         $organizationId = (int) $input['organizationId'];
         $deviceId       = (int) $input['deviceId'];
-        $method         = (string) ($input['method'] ?? '');
+        $method         = Util::str($input['method'] ?? null, 32) ?? '';
 
         if (!in_array($method, self::DISPOSAL_METHODS, true)) {
             throw Util::badRequest(
@@ -690,7 +764,10 @@ final class Devices
 
                 $changed[] = ['id' => $deviceId, 'name' => $device['name'], 'status' => $device['status']];
             } catch (\Throwable $e) {
-                $skipped[] = ['id' => $deviceId, 'reason' => $e->getMessage()];
+                $skipped[] = [
+                    'id'     => $deviceId,
+                    'reason' => $e instanceof HttpError ? $e->getMessage() : 'That one failed on the server.',
+                ];
             }
         }
 

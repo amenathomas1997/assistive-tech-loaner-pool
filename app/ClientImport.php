@@ -56,6 +56,12 @@ final class ClientImport
         $dryRun         = (bool) ($input['dryRun'] ?? true);
         $updateExisting = (bool) ($input['updateExisting'] ?? true);
 
+        // A counselor's import stays inside their own caseload: every row is
+        // theirs, and a row matching somebody else's client is refused. Matching
+        // is by a reference anyone can type, so without this one line of a
+        // spreadsheet could rewrite any client in the system.
+        $counselor = isset($input['restrictToCounselor']) ? (int) $input['restrictToCounselor'] : null;
+
         ['headers' => $headers, 'records' => $records]
             = Csv::toRecords($input['text'], $input['delimiter'] ?? null);
 
@@ -66,7 +72,9 @@ final class ClientImport
             throw Util::badRequest('That file has ' . count($records) . ' rows, over the limit.');
         }
 
-        $mapping = $input['mapping'] ?? Csv::suggestClientMapping($headers)['mapping'];
+        $mapping = is_array($input['mapping'] ?? null)
+            ? $input['mapping']
+            : Csv::suggestClientMapping($headers)['mapping'];
         $fields  = array_values($mapping);
 
         // A client needs a name. Without one there is nothing to show on a loan
@@ -174,6 +182,15 @@ final class ClientImport
             }
 
             $existing = self::findExisting($organizationId, $client);
+
+            if ($counselor !== null) {
+                if ($existing !== null && (int) $existing['counselor_id'] !== $counselor) {
+                    $errors[] = ['line' => $line, 'error' => 'That reference belongs to a client who is not '
+                                . 'on your caseload, so this row was left out.'];
+                    continue;
+                }
+                $client['counselor_id'] = $counselor;
+            }
 
             $plan[] = [
                 'line'     => $line,
@@ -320,7 +337,7 @@ final class ClientImport
         }
 
         return Db::one(
-            'SELECT id FROM clients WHERE organization_id = ? AND external_ref = ?',
+            'SELECT id, counselor_id FROM clients WHERE organization_id = ? AND external_ref = ?',
             [$organizationId, $client['external_ref']],
         );
     }

@@ -226,6 +226,23 @@ final class Sites
                 );
             }
 
+            // Sending marks a device "maintenance" and receiving marks it
+            // "available", so only a device that really is available can go
+            // through that round trip. Anything else would come out the far
+            // end with its real status gone: a retired device back in stock,
+            // a device under repair ready to lend, a waitlist hold forgotten.
+            if ($device['status'] !== 'available') {
+                throw Util::conflict(
+                    $device['status'] === 'reserved'
+                        ? "{$device['name']} is being held for someone. Release the hold before sending it."
+                        : sprintf(
+                            '%s is marked "%s", so it cannot be sent to another site.',
+                            $device['name'], str_replace('_', ' ', (string) $device['status']),
+                        ),
+                    ['status' => $device['status']],
+                );
+            }
+
             for ($attempt = 0; $attempt < 6; $attempt++) {
                 $reference = Util::makeReference('TR');
 
@@ -306,6 +323,22 @@ final class Sites
                 );
             }
 
+            $device = Db::one(
+                'SELECT id, name, status, active_repair_id FROM devices WHERE id = ? FOR UPDATE',
+                [$transfer['device_id']],
+            );
+
+            // A transfer that was only ever pending never took the device out
+            // of service, so it can have been lent in the meantime.
+            $loan = Loans::activeLoanForDevice((int) $device['id'], true);
+            if ($loan !== null) {
+                throw Util::conflict(
+                    "{$device['name']} is out on loan ({$loan['reference']}), so it cannot be received "
+                    . 'at another site. Cancel this transfer, or check the device in first.',
+                    ['loan_reference' => $loan['reference']],
+                );
+            }
+
             Db::execute(
                 'UPDATE device_transfers
                     SET status = "received", received_at = NOW(), received_by = ?,
@@ -316,9 +349,16 @@ final class Sites
 
             // Arriving is what changes where the device is, and it comes back
             // into service at the far end.
+            // Only undo what sending did. "maintenance" on a device with an
+            // open repair is the repair's, not the courier's.
             Db::execute(
-                'UPDATE devices SET site_id = ?, status = "available", updated_at = NOW() WHERE id = ?',
-                [$transfer['to_site_id'], $transfer['device_id']],
+                'UPDATE devices
+                    SET site_id = ?,
+                        status = CASE WHEN ? = 1 AND status = "maintenance" AND active_repair_id IS NULL
+                                      THEN "available" ELSE status END,
+                        updated_at = NOW()
+                  WHERE id = ?',
+                [$transfer['to_site_id'], $transfer['status'] === 'in_transit' ? 1 : 0, $transfer['device_id']],
             );
 
             return $transfer;
@@ -353,31 +393,40 @@ final class Sites
         $organizationId = (int) $input['organizationId'];
         $transferId     = (int) $input['transferId'];
 
-        $transfer = Db::one(
-            'SELECT * FROM device_transfers WHERE id = ? AND organization_id = ?',
-            [$transferId, $organizationId],
-        );
-        if ($transfer === null) {
-            throw Util::notFound('That transfer does not exist.');
-        }
-        if ($transfer['status'] === 'received') {
-            throw Util::conflict(
-                'That transfer has already been received. Send it back the other way instead.',
+        $transfer = Db::transaction(static function () use ($organizationId, $transferId, $input): array {
+            $transfer = Db::one(
+                'SELECT * FROM device_transfers WHERE id = ? AND organization_id = ? FOR UPDATE',
+                [$transferId, $organizationId],
             );
-        }
+            if ($transfer === null) {
+                throw Util::notFound('That transfer does not exist.');
+            }
+            if ($transfer['status'] === 'received') {
+                throw Util::conflict(
+                    'That transfer has already been received. Send it back the other way instead.',
+                );
+            }
+            if ($transfer['status'] === 'cancelled') {
+                throw Util::conflict('That transfer has already been cancelled.');
+            }
 
-        Db::transaction(static function () use ($transferId, $transfer, $input): void {
             Db::execute(
                 'UPDATE device_transfers SET status = "cancelled", notes = COALESCE(?, notes) WHERE id = ?',
                 [Util::str($input['reason'] ?? null), $transferId],
             );
 
             // Put it back into service where it still physically is.
-            Db::execute(
-                'UPDATE devices SET status = "available", updated_at = NOW()
-                  WHERE id = ? AND status = "maintenance"',
-                [$transfer['device_id']],
-            );
+            // Only an in-transit transfer changed the status, and then only
+            // if no repair has claimed the device since.
+            if ($transfer['status'] === 'in_transit') {
+                Db::execute(
+                    'UPDATE devices SET status = "available", updated_at = NOW()
+                      WHERE id = ? AND status = "maintenance" AND active_repair_id IS NULL',
+                    [$transfer['device_id']],
+                );
+            }
+
+            return $transfer;
         });
 
         $full = self::transfer($organizationId, $transferId);
@@ -390,6 +439,12 @@ final class Sites
             'entityLabel'    => $full['device_name'],
             'summary'        => "Transfer {$full['reference']} cancelled",
         ]);
+
+        try {
+            Reservations::promoteNextForDevice($actor, $organizationId, (int) $transfer['device_id']);
+        } catch (\Throwable $e) {
+            error_log('[sites] waitlist promotion after cancel failed: ' . $e->getMessage());
+        }
 
         return $full;
     }

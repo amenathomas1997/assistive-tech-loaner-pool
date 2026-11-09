@@ -98,7 +98,7 @@ final class AdminRoutes
         }
         if (array_key_exists('contact_email', $body) || array_key_exists('contactEmail', $body)) {
             $sets[]   = 'contact_email = ?';
-            $params[] = Util::email($body['contact_email'] ?? $body['contactEmail'], 'contact_email');
+            $params[] = Util::email($body['contact_email'] ?? $body['contactEmail'] ?? null, 'contact_email');
         }
         if (array_key_exists('timezone', $body)) {
             $timezone = Util::requiredStr($body['timezone'], 'timezone', 64);
@@ -430,7 +430,11 @@ final class AdminRoutes
                 'group'   => $d[2],
                 'secret'  => $d[3] ?? false,
             ], Settings::DEFINITIONS),
-            'cron' => Jobs::cronCommand($request->baseUrl()),
+            // Holds the cron token. Somebody who can read the settings but not
+            // change them has no use for it.
+            'cron' => in_array('settings.write', $request->auth['capabilities'] ?? [], true)
+                ? Jobs::cronCommand($request->baseUrl())
+                : null,
         ]);
     }
 

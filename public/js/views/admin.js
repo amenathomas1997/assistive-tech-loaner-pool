@@ -285,7 +285,7 @@ export async function renderSettings() {
   const policyBoxes = {};
   const POLICY = [
     ['loans.require_client_or_tech', 'A loan must name a client, technician or program',
-     'Prevents equipment leaving with nobody recorded as responsible.'],
+     'Stops equipment going out with no named person responsible.'],
     ['loans.allow_overdue_checkout', 'Allow check-out to a client who already has something overdue',
      'Off by default. Turn on if blocking would get in the way of service.'],
     ['loans.auto_approve_vrc', 'Approve counselor requests automatically',
@@ -989,14 +989,19 @@ function updatesSection(readOnly) {
                   (outcome.log || []).map((line) => el('li', { text: line }))),
               );
 
-              toastOk(outcome.message);
-              announce('The update finished. Reload the page to use the new version.',
-                { assertive: true });
+              // The browser is still running the old JavaScript, so a reload
+              // is needed to pick up the new interface. It is theirs to press:
+              // a page that replaces itself four seconds after a message
+              // appeared takes that message away from anyone still reading it
+              // (SC 3.2.5, 2.2.4).
+              progress.append(el('button', {
+                type: 'button', class: 'btn btn-primary',
+                onClick: () => window.location.reload(),
+              }, 'Reload to use the new version'));
 
-              // The browser is still running the old JavaScript at this point.
-              // Reloading is the honest way to pick up the new interface, and
-              // the delay lets the log above be read first.
-              setTimeout(() => window.location.reload(), 4000);
+              toastOk(outcome.message);
+              announce('The update finished. Use the Reload button to start the new version.',
+                { assertive: true });
             } catch (err) {
               clear(progress);
 
@@ -1301,7 +1306,7 @@ function agreementsSection(settings, readOnly) {
 function photosSection(settings, readOnly) {
   const boxes = {};
   const rows = [
-    ['photos.enabled', 'Allow condition photos', 'Off by default. Photographing equipment is a data-protection decision to make deliberately.'],
+    ['photos.enabled', 'Allow condition photos', 'Off by default. Taking photos of equipment affects privacy, so turn this on only if you mean to.'],
     ['photos.prompt_on_checkout', 'Offer the camera at check-out', 'Still optional for the person at the desk.'],
     ['photos.prompt_on_checkin', 'Offer the camera at check-in', 'Where damage is usually discovered.'],
   ];
@@ -1397,7 +1402,8 @@ function schedulerSection() {
               });
             },
           }, 'Run reminders now'),
-          el('button', {
+          // The answer holds the cron token, so this needs settings.write.
+          readOnly ? null : el('button', {
             type: 'button', class: 'btn',
             onClick: async () => {
               try {

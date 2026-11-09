@@ -67,7 +67,7 @@ final class Outcomes
     {
         $organizationId = (int) $input['organizationId'];
         $loanId         = (int) $input['loanId'];
-        $outcome        = $input['outcome'] ?? null;
+        $outcome        = is_array($input['outcome'] ?? null) ? 'not-a-value' : ($input['outcome'] ?? null);
 
         $loan = Loans::getVisible($input['auth'] ?? null, $organizationId, $loanId);
 
@@ -175,7 +175,15 @@ final class Outcomes
         $limit  = (int) ($options['limit'] ?? 50);
         $offset = (int) ($options['offset'] ?? 0);
 
-        $where = 'l.organization_id = ? AND l.status = "returned" AND l.outcome IS NULL';
+        $where  = 'l.organization_id = ? AND l.status = "returned" AND l.outcome IS NULL';
+        $params = [$organizationId];
+
+        if (!empty($options['counselorId'])) {
+            $where .= ' AND (EXISTS (SELECT 1 FROM clients oc WHERE oc.id = l.client_id AND oc.counselor_id = ?)
+                         OR EXISTS (SELECT 1 FROM loan_requests orq WHERE orq.id = l.request_id AND orq.requested_by = ?))';
+            $params[] = (int) $options['counselorId'];
+            $params[] = (int) $options['counselorId'];
+        }
 
         $rows = Db::all(
             "SELECT l.id, l.reference, l.checked_out_at, l.returned_at,
@@ -190,10 +198,10 @@ final class Outcomes
               WHERE {$where}
               ORDER BY l.returned_at DESC
               LIMIT {$limit} OFFSET {$offset}",
-            [$organizationId],
+            $params,
         );
 
-        $total = (int) Db::value("SELECT COUNT(*) FROM loans l WHERE {$where}", [$organizationId]);
+        $total = (int) Db::value("SELECT COUNT(*) FROM loans l WHERE {$where}", $params);
 
         return [
             'rows'   => $rows,

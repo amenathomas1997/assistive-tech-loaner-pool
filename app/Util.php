@@ -140,7 +140,7 @@ final class Util
 
     public static function bool(mixed $value, bool $fallback = false): bool
     {
-        if ($value === null || $value === '') {
+        if ($value === null || $value === '' || is_array($value)) {
             return $fallback;
         }
         if (is_bool($value)) {

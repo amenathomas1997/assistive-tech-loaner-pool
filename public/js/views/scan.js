@@ -261,27 +261,38 @@ export async function renderScanStation() {
   });
 
   /**
-   * Keep focus in the capture input so a wedge scanner's keystrokes always
-   * land somewhere useful. Skipped whenever the user is deliberately in
-   * another control, or a dialog is open — stealing focus from a form field
-   * mid-typing would be far worse than missing a scan.
+   * A wedge scanner is a keyboard, so its keystrokes go wherever focus is.
+   * When nothing has focus they are routed to the capture box the moment one
+   * arrives.
+   *
+   * This used to be a timer that pulled focus back every 1.2 seconds. With a
+   * screen reader in browse mode focus sits on the page body while the person
+   * reads, so the timer dragged them back to the input over and over and the
+   * screen could not be read past the first line (SC 3.2.1, 3.2.5). Waiting
+   * for a keystroke gets the same scan and takes nothing from anybody: a
+   * screen reader's reading keys never reach the page.
+   *
+   * Capture phase, and stopped there, so a barcode beginning with G or a
+   * slash is not taken for a keyboard shortcut.
    */
-  const refocus = () => {
+  const routeStrayKey = (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key.length !== 1 && event.key !== 'Enter') return;
     if (document.querySelector('dialog[open]')) return;
+
     const active = document.activeElement;
-    if (active && active !== document.body && active !== captureInput) {
-      const isFormControl = ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'A'].includes(active.tagName);
-      if (isFormControl) return;
-    }
+    if (active && active !== document.body && active.id !== 'main-content') return;
+
+    event.stopPropagation();
     captureInput.focus();
   };
 
-  const refocusTimer = setInterval(refocus, 1200);
+  document.addEventListener('keydown', routeStrayKey, true);
 
   // Stop the timer when this view is torn down, or it leaks across navigation.
   const observer = new MutationObserver(() => {
     if (!document.body.contains(container)) {
-      clearInterval(refocusTimer);
+      document.removeEventListener('keydown', routeStrayKey, true);
       stopCamera();
       closeChannelStream();
       observer.disconnect();

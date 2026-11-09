@@ -289,7 +289,7 @@ as SC 2.1.4 requires, and never fire while you are typing.
 ```
 
 Drops and recreates the test database, runs the web installer through its own
-API, then exercises the application end to end — 682 checks covering
+API, then exercises the application end to end — 758 checks covering
 authentication, RBAC, spreadsheet import, barcode encoding, the loan
 lifecycle, the request workflow, kits and accessories, agreements and
 signatures, condition photos, the waitlist, repairs, funding reporting, bulk
@@ -337,6 +337,11 @@ enforced at check-out, can be overridden explicitly and audibly, and is
 fulfilled when its person collects; a cancelled loan consults the waitlist; a
 reservation for next month is not held today; and the signature on a signed
 agreement cannot be deleted. `scripts/e2e-custody.sh` walks each of those.
+
+**The boundary suite** covers who may see what, and what a status may become.
+A counselor is held to their own caseload on every route, transfers and repairs
+cannot overwrite a device's real status, and wrong-typed input gets a 400
+rather than a server error. `scripts/e2e-boundaries.sh` walks each of those.
 
 Barcode encoders alone, with no database:
 

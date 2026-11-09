@@ -390,7 +390,8 @@ final class Barcode
               * { box-sizing: border-box; }
               body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #000; background: #fff; }
               .toolbar { padding: 12px; background: #f2f2f2; border-bottom: 1px solid #ccc; }
-              .toolbar button { font: inherit; padding: 8px 16px; cursor: pointer; }
+              .toolbar button { font: inherit; min-height: 44px; padding: 8px 16px; cursor: pointer; }
+              .toolbar h1 { font-size: 1.1rem; margin: 0 0 8px; }
               .sheet { display: grid; grid-template-columns: repeat({$columns}, {$labelWidth}mm); gap: 0; }
               .label {
                 width: {$labelWidth}mm; height: {$labelHeight}mm;
@@ -408,12 +409,15 @@ final class Barcode
             </style>
             </head>
             <body>
+              <main>
               <div class="toolbar">
+                <h1>Device labels</h1>
                 <button type="button" data-print hidden>Print {$count} label{$plural}</button>
                 <noscript>Use your browser's own Print command to print this sheet.</noscript>
                 <span> &nbsp; Symbology: {$symbology} &nbsp;|&nbsp; Label size: {$labelWidth} &times; {$labelHeight} mm</span>
               </div>
               <div class="sheet">{$labels}</div>
+              </main>
               <script src="/js/print-sheet.js"></script>
             </body>
             </html>

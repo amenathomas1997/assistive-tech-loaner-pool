@@ -9,7 +9,11 @@ It was audited against **WCAG 2.2 at Level AAA** on 7 November 2026, against
 the running application rather than the source, in both light and dark
 themes. It was re-measured on 8 November 2026 after the custom-colour theme
 was added, this time across fourteen screens in three themes — 5,508
-text-bearing elements in all.
+text-bearing elements in all. It was audited again from scratch on 8 November
+2026, criterion by criterion, across every screen and dialog, the sign-in
+pages, the phone scanner, the installer and the two printable documents. That
+pass is recorded under *The full re-audit* below, including where this
+document had been wrong.
 
 ---
 
@@ -20,9 +24,10 @@ levels passes, including the four added in WCAG 2.2 (2.4.11 Focus Not
 Obscured, 2.5.7 Dragging Movements, 2.5.8 Target Size (Minimum), 3.3.8
 Accessible Authentication).
 
-**Level AAA: substantially met, but not claimed.** Of the 23 applicable AAA
-criteria, 21 pass and 2 pass only in part. The details are below, named
-individually, because "AAA" as a bare claim is not worth much.
+**Level AAA: substantially met, but not claimed.** WCAG 2.2 has 31 AAA
+criteria. 6 do not apply here, 23 are met and 2 are met only in part. The
+details are below, named individually, because "AAA" as a bare claim is not
+worth much.
 
 WCAG itself says so:
 
@@ -33,6 +38,47 @@ WCAG itself says so:
 So this document does not claim AAA conformance. It says which criteria are
 met, which are not, and why — which is the information somebody procuring or
 deploying this actually needs.
+
+---
+
+## The full re-audit, 8 November 2026
+
+This went through all 86 success criteria of WCAG 2.2, against the running
+application: 22 screens and 28 dialogs in a browser (2,909 text elements),
+every screen again at 320px wide with and without the SC 1.4.12 text spacing,
+then the sign-in pages, phone scanner, installer, printed agreement and label
+sheet.
+
+**Where this document was wrong.** It listed 23 AAA criteria and never
+mentioned 1.3.6, 2.4.8, 3.2.5 or 3.3.9. It said every target was 44px, that
+reflow passed, and that contrast passed everywhere. Those were true of what had
+been measured and false of what had not.
+
+**What failed, all now fixed:**
+
+| Criterion | Level | What was wrong |
+|---|---|---|
+| 2.4.1 Bypass Blocks, 1.3.1 | A | The sign-in, two-factor and reset pages had no `<main>`, so "Skip to main content" went nowhere |
+| 1.4.10 Reflow | AA | At 320px every table screen scrolled sideways. Visually hidden text in the last column is `position:absolute`, which the scrolling wrapper does not clip unless it is positioned itself. The header was 18px too wide and a two-column grid had a hard 320px minimum |
+| 3.2.1 On Focus, 3.2.5 Change on Request | A, AAA | The scan station pulled focus back to its input every 1.2 seconds whenever focus was on the page body, which is where a screen reader in browse mode leaves it. The screen could not be read. It now waits for a keystroke |
+| 3.2.5, 2.2.4 | AAA | The "being updated" page used `<meta refresh>` (failure F41), and the page reloaded itself four seconds after a finished update |
+| 1.4.6 Contrast (Enhanced) | AAA | The header buttons were white on a white veil, 5.34:1. The build's colour check did not know about veils; it does now |
+| 2.5.5 Target Size (Enhanced) | AAA | Footer help button 24px, file inputs 22px, disclosure summaries 23px, the print button on the label sheet 39px |
+| 1.4.8 Visual Presentation | AAA | Paragraph spacing was 1em. The criterion asks for 1.5 times the line spacing, so 2.4em here. Two blocks of text also ran to 100 characters |
+| 2.4.2, 2.4.8 | A, AAA | Every device had the page title "Device". Records now name themselves, and only one navigation item is marked current |
+| 2.4.3 Focus Order | A | Disabling the focused button during a save dropped focus to the top of the page |
+
+**Not a failure, for the record.** Duplicate ids and unlabelled checkboxes
+appeared in the first pass and were traced to the test: in a hidden browser
+pane a closed `<dialog>` keeps its place in the document until the next
+animation frame. Removing them in the test made every one disappear.
+
+**Reading level (SC 3.1.5) has now been measured.** 261 interface sentences
+average Flesch-Kincaid grade 6.5, weighted by length, and the default loan
+agreement is 7.7. The criterion asks for lower secondary, roughly grades 7 to
+9. That is a formula: it says nothing about whether a sentence is clear, and a
+person should still read the agreement that clients sign. An agreement edited
+in Settings is not covered by this figure.
 
 ---
 
@@ -168,7 +214,7 @@ missing, it keeps its light-theme value.
 
 ## Level AAA, criterion by criterion
 
-### Met (21)
+### Met (23), and not applicable (6)
 
 | Criterion | How |
 |---|---|
@@ -176,22 +222,29 @@ missing, it keeps its light-theme value.
 | **1.2.7** Extended Audio Description | Not applicable — no video |
 | **1.2.8** Media Alternative | Not applicable — no synchronised media |
 | **1.2.9** Audio-only (Live) | Not applicable — no live audio |
-| **1.4.6** Contrast (Enhanced) | 58 pairings at ≥7:1, both themes, checked on every build |
+| **1.3.6** Identify Purpose | Named landmarks, `autocomplete` tokens on the person's own details, native controls throughout, and every icon hidden beside a real word |
+| **1.4.6** Contrast (Enhanced) | 133 pairings at ≥7:1 checked on every build; 2,909 rendered text elements measured with no failures |
 | **1.4.7** Low or No Background Audio | Not applicable — no audio |
 | **1.4.8** Visual Presentation | Line length capped at 70ch, never justified, line spacing 1.55, resizes to 200% without horizontal scroll, and the user can choose their own two colours |
 | **1.4.9** Images of Text (No Exception) | No images of text anywhere; the logo is inline SVG, every icon is `aria-hidden` beside real text |
 | **2.1.3** Keyboard (No Exception) | Nothing needs a pointer. Signing is three equal methods — type your name, draw, or photograph a signed sheet — with typing the default. Barcode scanning always has manual entry beside it |
+| **2.2.4** Interruptions | Confirmations can be set not to clear themselves, nothing refreshes on its own, and errors never disappear |
+| **2.2.5** Re-authenticating | The sign-in opens over the page and the half-finished form is intact afterwards |
 | **2.2.6** Timeouts | Sessions last 14 days with no inactivity timeout, so data persists far beyond the 20 hours the exception allows |
 | **2.3.2** Three Flashes | Nothing flashes |
 | **2.3.3** Animation from Interactions | `prefers-reduced-motion: reduce` disables every transition and animation |
+| **2.4.8** Location | The current page is marked in the navigation, record pages have a breadcrumb, and the page title names the record |
 | **2.4.9** Link Purpose (Link Only) | Every link reads unambiguously out of context |
 | **2.4.10** Section Headings | Each screen is sectioned, each `<section>` labelled by its heading |
 | **2.4.12** Focus Not Obscured (Enhanced) | `scroll-margin-top` of 78px clears the sticky header. Tabbed every focusable element on four screens: none obscured |
 | **2.4.13** Focus Appearance | 3px outline at 2px offset plus a 5px ring. The ring reads 8.01:1 against the surface, well over the 3:1 required |
-| **2.5.5** Target Size (Enhanced) | Every target is at least 44×44 |
+| **2.5.5** Target Size (Enhanced) | Every control on every screen and dialog measured at 44×44 or more; links inside a sentence are excepted by the criterion |
 | **2.5.6** Concurrent Input Mechanisms | Nothing restricts input mode; touch, mouse, keyboard and scanner all work at once |
 | **3.1.3** Unusual Words | Glossary in the help dialog, reachable from every screen |
 | **3.1.4** Abbreviations | Same glossary |
+| **3.1.5** Reading Level | Measured at grade 6.5 for the interface and 7.7 for the default agreement. See the re-audit above for what that does and does not show |
+| **3.2.5** Change on Request | Nothing moves focus, reloads or navigates unless the person asked it to |
+| **3.3.9** Accessible Authentication (Enhanced) | Paste and password managers work on every field, one-time codes are marked for autofill, and nothing asks anybody to recognise or transcribe an image |
 | **3.3.5** Help | A Help button in the same place on every screen (which is also SC 3.2.6), plus per-field help text |
 
 ### Partly met (2)
@@ -225,17 +278,11 @@ There is now. **Appearance**, in the header of every screen and under the
 sign-in form, offers light, dark, follow-the-device, or two colours of the
 user's own choosing. See *Choosing your own colours* below.
 
-### Not assessed
+### Not applicable
 
-**3.1.5 Reading Level.** The criterion asks that text not require reading
-ability beyond lower secondary education, or that a simpler alternative be
-available. Interface copy here was written plainly and deliberately, but
-reading level is a judgement about prose that an automated check cannot make
-honestly, and no human assessment has been done. Unverified rather than
-claimed.
-
-**3.1.6 Pronunciation.** No content depends on pronunciation for its meaning.
-Arguably not applicable; recorded as unassessed rather than passed.
+**3.1.6 Pronunciation.** No word here needs its pronunciation to be understood.
+The five media criteria above do not apply either, as there is no audio or
+video.
 
 ---
 
@@ -352,7 +399,7 @@ data — not against the source.
 Accessibility that is verified once decays. Two scripts run in
 `./scripts/reset-and-test.sh`:
 
-- `scripts/verify-contrast.mjs` — 132 colour pairings against their AA or AAA
+- `scripts/verify-contrast.mjs` — 133 colour pairings against their AA or AAA
   threshold, read from the stylesheet so it cannot drift from what it checks:
   body and muted text on all eleven surfaces, every status colour on its own
   tint, both gradient ends of the header and the primary button, the two count
@@ -370,7 +417,12 @@ Accessibility that is verified once decays. Two scripts run in
   regions were verified through the accessibility tree. They have not been
   driven with NVDA, JAWS or VoiceOver. That is the next thing worth doing, and
   the one thing here no script can replace.
-- **Reading level unassessed**, as above.
+- **Reading level is a formula's answer**, as above. Nobody has read the
+  interface for plainness, and that includes the people it is written for.
+- **The focus ring was not re-measured live in the November re-audit**, because
+  the browser pane was not the focused window and `:focus-visible` does not
+  match there. The rule itself did not change, and it was measured live on
+  7 November.
 - **Custom colours flatten two things on purpose**: text that is normally
   muted is not muted, and the status pills lose their separate hues. Both are
   described under *Choosing your own colours*. Neither is a conformance

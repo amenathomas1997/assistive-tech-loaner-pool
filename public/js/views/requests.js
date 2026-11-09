@@ -260,6 +260,7 @@ export async function renderNewRequest() {
 
 export async function renderRequestDetail({ params }) {
   const { request } = await api.requestItem(params.id);
+  document.title = `Request ${request.reference} — Loaner Pool`;
   const container = el('div');
 
   const rerender = async () => {

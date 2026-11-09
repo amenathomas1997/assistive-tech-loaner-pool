@@ -233,7 +233,7 @@ final class LoanRoutes
                 ?? $body['accessoriesIn'] ?? null,
             'newDeviceStatus'  => Util::oneOf(
                 $body['new_device_status'] ?? $body['newDeviceStatus'] ?? 'available',
-                \Loaner\Devices::STATUSES, 'new_device_status', true,
+                \Loaner\Devices::RETURN_STATUSES, 'new_device_status', true,
             ),
             'method'           => Util::bool($body['scanned'] ?? false)
                 ? 'scan'
@@ -373,7 +373,7 @@ final class LoanRoutes
             'reason'         => Util::str($request->input('reason')),
             'deviceStatus'   => Util::oneOf(
                 $request->input('device_status') ?? 'available',
-                \Loaner\Devices::STATUSES, 'device_status', true,
+                \Loaner\Devices::RETURN_STATUSES, 'device_status', true,
             ),
             'actorId'        => $auth['userId'] ?? null,
         ]);
@@ -401,7 +401,10 @@ final class LoanRoutes
 
     public static function overdue(Request $request): never
     {
-        Response::json(Util::collection(Loans::overdue((int) $request->auth['organizationId'])));
+        Response::json(Util::collection(Loans::visibleOnly(
+            $request->auth,
+            Loans::overdue((int) $request->auth['organizationId']),
+        )));
     }
 
     public static function dueSoon(Request $request): never
@@ -411,7 +414,7 @@ final class LoanRoutes
             ?? Settings::get($organizationId, 'notify.due_soon_days'));
 
         Response::json(Util::collection(
-            Loans::dueSoon($organizationId, $within),
+            Loans::visibleOnly($request->auth, Loans::dueSoon($organizationId, $within)),
             ['within_days' => $within],
         ));
     }
@@ -420,12 +423,15 @@ final class LoanRoutes
     {
         $organizationId = (int) $request->auth['organizationId'];
 
-        $result = Loans::list($organizationId, [
-            'status'   => $request->queryParam('status'),
-            'from'     => $request->queryParam('from'),
-            'to'       => $request->queryParam('to'),
-            'search'   => $request->queryParam('search'),
-        ], ['limit' => 10000, 'offset' => 0, 'sort' => 'checked_out_at']);
+        // The same rule as the on-screen list. A CSV is the easiest way of all
+        // to take someone else's caseload away with you.
+        $result = Loans::list($organizationId, array_filter([
+            'status'      => $request->queryParam('status'),
+            'from'        => $request->queryParam('from'),
+            'to'          => $request->queryParam('to'),
+            'search'      => $request->queryParam('search'),
+            'counselorId' => Auth::ownRecordsOnly($request->auth),
+        ], static fn ($v): bool => $v !== null), ['limit' => 10000, 'offset' => 0, 'sort' => 'checked_out_at']);
 
         $csv = Util::toCsv(
             ['reference', 'device', 'barcode', 'status', 'technician', 'client', 'program',

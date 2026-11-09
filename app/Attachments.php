@@ -81,6 +81,15 @@ final class Attachments
             );
         }
 
+        // What the bytes are, not what the data URL claims. The stored type is
+        // what the file is later served as.
+        if (($info['mime'] ?? '') !== ($mime === 'image/jpg' ? 'image/jpeg' : $mime)) {
+            throw Util::badRequest(
+                'That file is not the kind of image it says it is. Save it again as a JPEG or PNG.',
+                ['field' => 'images'],
+            );
+        }
+
         $extension = self::IMAGE_TYPES[$mime];
         $relative  = sprintf('%d/%s/%s.%s',
             $organizationId, date('Y-m'), bin2hex(random_bytes(16)), $extension);
@@ -116,7 +125,7 @@ final class Attachments
     {
         $organizationId = (int) $input['organizationId'];
         $loanId         = (int) $input['loanId'];
-        $phase          = (string) ($input['phase'] ?? 'out');
+        $phase          = Util::str($input['phase'] ?? null, 16) ?? 'out';
         $images         = $input['images'] ?? [];
 
         if (!Settings::get($organizationId, 'photos.enabled')) {
@@ -359,18 +368,30 @@ final class Attachments
             return null;
         }
 
-        $base = realpath(Config::uploadsDir());
-        $path = realpath(Config::uploadsDir() . '/' . $row['storage_path']);
+        $path = self::resolveStored((string) $row['storage_path']);
 
         // A stored path should never escape the uploads directory, but a
         // corrupt row must not become an arbitrary file read.
-        if ($base === false || $path === false || !str_starts_with($path, $base . DIRECTORY_SEPARATOR)) {
+        if ($path === null) {
             return null;
         }
 
         $row['absolute_path'] = $path;
 
         return $row;
+    }
+
+    /** The real path of a stored file, or null if it is gone or outside the uploads directory. */
+    private static function resolveStored(string $relative): ?string
+    {
+        $base = realpath(Config::uploadsDir());
+        $path = realpath(Config::uploadsDir() . '/' . $relative);
+
+        if ($base === false || $path === false || !str_starts_with($path, $base . DIRECTORY_SEPARATOR)) {
+            return null;
+        }
+
+        return $path;
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -412,7 +433,13 @@ final class Attachments
 
     public static function delete(?array $actor, int $organizationId, int $attachmentId): void
     {
-        $row = self::absolutePath($organizationId, $attachmentId);
+        // Looked up directly rather than through absolutePath(), which answers
+        // null when the file has gone: a record whose file is missing is
+        // exactly the one somebody needs to be able to delete.
+        $row = Db::one(
+            'SELECT id, filename, storage_path, kind FROM attachments WHERE id = ? AND organization_id = ?',
+            [$attachmentId, $organizationId],
+        );
         if ($row === null) {
             throw Util::notFound('That attachment does not exist.');
         }
@@ -421,9 +448,7 @@ final class Attachments
         // deleting a signature image would quietly leave a "signed" agreement
         // with nothing signed on it. The retention policy promises signed
         // agreements are never deleted; this is where that promise is kept.
-        $kind = Db::value('SELECT kind FROM attachments WHERE id = ?', [$attachmentId]);
-
-        if ($kind === 'signature') {
+        if ($row['kind'] === 'signature') {
             throw Util::conflict(
                 'That image is the signature on a loan agreement, and a signed agreement is kept '
                 . 'as it was signed. If the agreement itself is wrong, add a note to the loan.',
@@ -434,11 +459,15 @@ final class Attachments
         // Row first: a database row pointing at a missing file is a cosmetic
         // problem, whereas a file with no row is invisible and never cleaned up.
         Db::execute('DELETE FROM attachments WHERE id = ? AND organization_id = ?', [$attachmentId, $organizationId]);
-        @unlink($row['absolute_path']);
+
+        $located = self::resolveStored((string) $row['storage_path']);
+        if ($located !== null) {
+            @unlink($located);
+        }
 
         Audit::record($actor, [
             'organizationId' => $organizationId,
-            'action'         => Audit::ATTACHMENT_ADDED,
+            'action'         => Audit::ATTACHMENT_DELETED,
             'entityType'     => 'attachment',
             'entityId'       => $attachmentId,
             'entityLabel'    => $row['filename'],

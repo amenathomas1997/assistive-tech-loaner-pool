@@ -624,6 +624,7 @@ export async function renderRepairs() {
 
 export async function renderRepairDetail({ params }) {
   const { repair } = await api.repair(params.id);
+  document.title = `Repair ${repair.reference} — Loaner Pool`;
   const meta = await api.repairMeta();
   const container = el('div');
 
@@ -664,7 +665,7 @@ export async function renderRepairDetail({ params }) {
           el('dt', { text: 'Resolution' }), el('dd', { text: repair.resolution || '—' }),
           el('dt', { text: 'Vendor' }), el('dd', { text: repair.vendor || 'In house' }),
           el('dt', { text: 'Vendor reference' }), el('dd', { text: repair.vendor_ref || '—' }),
-          el('dt', { text: 'Cost' }), el('dd', { text: repair.cost === null ? '—' : repair.cost.toFixed(2) }),
+          el('dt', { text: 'Cost' }), el('dd', { text: repair.cost === null ? '—' : Number(repair.cost).toFixed(2) }),
           el('dt', { text: 'Reported by' }), el('dd', { text: repair.reported_by_name || '—' }),
           el('dt', { text: 'Assigned to' }), el('dd', { text: repair.assigned_to_name || 'Unassigned' }),
           el('dt', { text: 'Opened' }), el('dd', {}, dateCell(repair.created_at, { withTime: true })),
@@ -676,7 +677,7 @@ export async function renderRepairDetail({ params }) {
 
       el('section', { class: 'card' }, [
         el('h2', { text: 'History' }),
-        el('ol', { class: 'timeline' }, repair.timeline.map((event) =>
+        el('ol', { class: 'timeline' }, (repair.events ?? []).map((event) =>
           el('li', {}, [
             el('strong', {
               text: event.event_type === 'opened'

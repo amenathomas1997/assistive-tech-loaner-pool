@@ -143,6 +143,8 @@ final class RequestRoutes
             }
         }
 
+        \Loaner\Directory::assertInCaseload($auth, $body['client_id'] ?? $body['clientId'] ?? null);
+
         $created = Requests::create(Audit::actor($request), [
             'organizationId'    => $organizationId,
             'requestedBy'       => $requestedBy,

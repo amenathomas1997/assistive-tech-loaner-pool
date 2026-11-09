@@ -391,7 +391,8 @@ async function openBulkStatusDialog(deviceIds, onDone) {
 // ---------------------------------------------------------------------------
 
 export async function renderDeviceDetail({ params }) {
-  const { device, loan_history: history } = await api.device(params.id);
+  const { device, loan_history: history = [] } = await api.device(params.id);
+  document.title = `${device.name} — Loaner Pool`;
   const [accessories, waitlist, repairs] = await Promise.all([
     api.accessories(device.id).then((r) => r.data).catch(() => []),
     api.deviceWaitlist(device.id).then((r) => r.data).catch(() => []),
@@ -427,7 +428,7 @@ export async function renderDeviceDetail({ params }) {
             }, 'Check out')
           : null,
         can('devices.write')
-          ? el('button', { type: 'button', class: 'btn', onClick: () => openDeviceDialog(device, rerender) }, 'Edit')
+          ? el('button', { type: 'button', class: 'btn', onClick: () => openDeviceDialog(device, rerender) }, 'Edit device')
           : null,
         el('a', {
           class: 'btn', target: '_blank', rel: 'noopener',

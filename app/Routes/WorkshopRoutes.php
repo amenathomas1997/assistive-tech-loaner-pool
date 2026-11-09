@@ -85,7 +85,8 @@ final class WorkshopRoutes
 
         // --- Jobs -----------------------------------------------------------
         $router->get('/jobs', [self::class, 'jobs'], 'settings.read');
-        $router->get('/jobs/cron-command', [self::class, 'cronCommand'], 'settings.read');
+        // settings.write, not read: the answer contains the cron token.
+        $router->get('/jobs/cron-command', [self::class, 'cronCommand'], 'settings.write');
         // No capability: this one authenticates by token so cron can call it.
         $router->post('/jobs/run', [self::class, 'runJobs']);
     }
@@ -213,7 +214,7 @@ final class WorkshopRoutes
     {
         $group = Kits::group((int) $request->auth['organizationId'], (string) $request->param('ref'));
 
-        if ($group === null) {
+        if ($group === null || Loans::visibleOnly($request->auth, $group['loans']) !== $group['loans']) {
             throw Util::notFound('No loan group matches that reference.');
         }
 
@@ -275,7 +276,11 @@ final class WorkshopRoutes
             (int) $request->param('id'),
         );
 
-        if ($reservation === null) {
+        // Same rule as the list: a counselor sees the entries they made.
+        if ($reservation === null
+            || (Auth::isRestrictedToOwnRecords($request->auth)
+                && (int) $reservation['requested_by'] !== (int) $request->auth['userId'])
+        ) {
             throw Util::notFound('That reservation does not exist.');
         }
 
@@ -305,6 +310,8 @@ final class WorkshopRoutes
                 ['field' => 'requested_by'],
             );
         }
+
+        \Loaner\Directory::assertInCaseload($auth, $body['client_id'] ?? $body['clientId'] ?? null);
 
         $reservation = Reservations::create(Audit::actor($request), [
             'organizationId' => $organizationId,
@@ -342,9 +349,12 @@ final class WorkshopRoutes
 
     public static function deviceWaitlist(Request $request): never
     {
-        Response::json(Util::collection(Reservations::forDevice(
-            (int) $request->auth['organizationId'],
-            (int) $request->param('deviceId'),
+        Response::json(Util::collection(Reservations::visibleOnly(
+            $request->auth,
+            Reservations::forDevice(
+                (int) $request->auth['organizationId'],
+                (int) $request->param('deviceId'),
+            ),
         )));
     }
 
@@ -473,6 +483,8 @@ final class WorkshopRoutes
 
     public static function agreementPreview(Request $request): never
     {
+        Loans::getVisible($request->auth, (int) $request->auth['organizationId'], (int) $request->param('loanId'));
+
         Response::json(Agreements::preview(
             (int) $request->auth['organizationId'],
             (int) $request->param('loanId'),
@@ -483,6 +495,9 @@ final class WorkshopRoutes
     {
         $organizationId = (int) $request->auth['organizationId'];
         $loanId         = (int) $request->param('loanId');
+
+        // A signed agreement names the client and carries their signature.
+        Loans::getVisible($request->auth, $organizationId, $loanId);
 
         $agreement = Agreements::forLoan($organizationId, $loanId);
 
@@ -528,6 +543,8 @@ final class WorkshopRoutes
 
     public static function printAgreement(Request $request): never
     {
+        Loans::getVisible($request->auth, (int) $request->auth['organizationId'], (int) $request->param('loanId'));
+
         Response::html(Agreements::printable(
             (int) $request->auth['organizationId'],
             (int) $request->param('loanId'),
@@ -536,7 +553,7 @@ final class WorkshopRoutes
 
     public static function missingAgreements(Request $request): never
     {
-        Response::json(Agreements::missing((int) $request->auth['organizationId']));
+        Response::json(Agreements::missing((int) $request->auth['organizationId'], $request->auth));
     }
 
     // -----------------------------------------------------------------------
@@ -686,7 +703,7 @@ final class WorkshopRoutes
                     'notes'            => Util::str($body['notes'] ?? null),
                     'newDeviceStatus'  => Util::oneOf(
                         $body['new_device_status'] ?? $body['newDeviceStatus'] ?? 'available',
-                        Devices::STATUSES, 'new_device_status', true,
+                        Devices::RETURN_STATUSES, 'new_device_status', true,
                     ),
                     'method'           => Util::oneOf($body['method'] ?? 'scan',
                         ['scan', 'manual', 'api'], 'method', true),
@@ -700,7 +717,19 @@ final class WorkshopRoutes
                     'days_late'   => $result['daysLate'],
                 ];
             } catch (\Throwable $e) {
-                $failed[] = ['identifier' => $identifier, 'loan_id' => $loanId, 'reason' => $e->getMessage()];
+                // Only messages written for people. Anything else is a fault,
+                // and its text may be SQL or a file path.
+                if (!$e instanceof \Loaner\HttpError) {
+                    error_log('[bulk check-in] ' . $e->getMessage());
+                }
+
+                $failed[] = [
+                    'identifier' => $identifier,
+                    'loan_id'    => $loanId,
+                    'reason'     => $e instanceof \Loaner\HttpError
+                        ? $e->getMessage()
+                        : 'That one failed on the server. Try it again on its own.',
+                ];
             }
         }
 

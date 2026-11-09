@@ -109,6 +109,7 @@ final class Audit
     public const KIT_CHECKED_IN   = 'kit.checked_in';
 
     public const ATTACHMENT_ADDED = 'attachment.added';
+    public const ATTACHMENT_DELETED = 'attachment.deleted';
     public const INSTALL_COMPLETED = 'install.completed';
 
     /**

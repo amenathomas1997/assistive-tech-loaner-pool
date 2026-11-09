@@ -144,10 +144,11 @@ export async function renderLoans() {
 
 export async function renderLoanDetail({ params }) {
   const { loan } = await api.loan(params.id);
+  document.title = `Loan ${loan.reference} — Loaner Pool`;
 
   const [agreement, attachments, groupLoans] = await Promise.all([
     api.agreement(loan.id).then((r) => r.agreement).catch(() => null),
-    api.loanAttachments(loan.id).then((r) => r.data).catch(() => []),
+    api.loanAttachments(loan.id).then((r) => r.all ?? []).catch(() => []),
     loan.group_ref ? api.loanGroup(loan.group_ref).then((r) => r.loans).catch(() => []) : Promise.resolve([]),
   ]);
 
@@ -253,9 +254,9 @@ export async function renderLoanDetail({ params }) {
               el('dl', { class: 'detail-list' }, [
                 el('dt', { text: 'Signed by' }), el('dd', { text: agreement.signed_by_name }),
                 el('dt', { text: 'Signing as' }), el('dd', { text: agreement.signed_by_role }),
-                el('dt', { text: 'Method' }), el('dd', { text: agreement.signature_method }),
+                el('dt', { text: 'Method' }), el('dd', { text: agreement.method_label || agreement.signature_method }),
                 el('dt', { text: 'Signed' }), el('dd', {}, dateCell(agreement.signed_at, { withTime: true })),
-                el('dt', { text: 'Witnessed by' }), el('dd', { text: agreement.witness_name || '—' }),
+                el('dt', { text: 'Witnessed by' }), el('dd', { text: agreement.witnessed_by_name || '—' }),
               ]),
               agreement.was_waived
                 ? alertBox(

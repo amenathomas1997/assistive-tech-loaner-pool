@@ -121,11 +121,27 @@ final class InsightsRoutes
 
     public static function overview(Request $request): never
     {
-        Response::json(Reports::overview(
+        $report = Reports::overview(
             (int) $request->auth['organizationId'],
             $request->queryParam('from'),
             $request->queryParam('to'),
-        ));
+        );
+
+        // The overview bundles the per-person tables. /reports/activity/{holder}
+        // limits a counselor to their own clients; this has to say the same.
+        $counselor = Auth::ownRecordsOnly($request->auth);
+        if ($counselor !== null) {
+            $report['activity'] = [
+                'clients'  => Reports::holderActivity(
+                    (int) $request->auth['organizationId'], 'client',
+                    $request->queryParam('from'), $request->queryParam('to'), $counselor,
+                )['rows'],
+                'programs' => [],
+                'techs'    => [],
+            ];
+        }
+
+        Response::json($report);
     }
 
     public static function devices(Request $request): never

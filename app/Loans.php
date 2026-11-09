@@ -485,7 +485,7 @@ final class Loans
      * @return array{kind: string, id: int, reference: string, held_for: string,
      *               until: ?string, client_id: ?int, program_id: ?int, user_id: ?int}|null
      */
-    private static function holdOn(int $organizationId, int $deviceId): ?array
+    public static function holdOn(int $organizationId, int $deviceId): ?array
     {
         $reservation = Db::one(
             'SELECT r.id, r.reference, r.client_id, r.program_id, r.requested_by, r.claim_expires_at,
@@ -571,10 +571,14 @@ final class Loans
         return (int) $techId === $hold['user_id'];
     }
 
-    private static function assertBelongs(string $table, mixed $id, int $organizationId, string $label): void
+    public static function assertBelongs(string $table, mixed $id, int $organizationId, string $label): void
     {
         if (empty($id)) {
             return;
+        }
+
+        if (!is_scalar($id) || !ctype_digit((string) $id)) {
+            throw Util::badRequest("That {$label} does not exist.", ['field' => "{$label}_id"]);
         }
 
         $row = Db::value("SELECT id FROM {$table} WHERE id = ? AND organization_id = ?", [$id, $organizationId]);
@@ -719,6 +723,13 @@ final class Loans
             $resolvedStatus = ($newDeviceStatus === 'available' && $stillOut > 0 && $stillOut >= $seats)
                 ? 'checked_out'
                 : $newDeviceStatus;
+
+            // A repair opened while the device was out is still open. Coming
+            // back does not mend it, and "available" would lend a faulty
+            // device to the next person.
+            if ($resolvedStatus === 'available' && !empty($device['active_repair_id'])) {
+                $resolvedStatus = 'maintenance';
+            }
 
             // Flagged for cleaning on the way back in, not on the way out:
             // this is the moment it stopped being with someone.
@@ -952,7 +963,12 @@ final class Loans
                   WHERE id = ?',
                 [$actorId, $loan['id']],
             );
-            Db::execute('UPDATE devices SET status = ?, updated_at = NOW() WHERE id = ?', [$deviceStatus, $device['id']]);
+            // Same rule as check-in: a cancelled loan does not close a repair.
+            $finalStatus = $deviceStatus === 'available' && !empty($device['active_repair_id'])
+                ? 'maintenance'
+                : $deviceStatus;
+
+            Db::execute('UPDATE devices SET status = ?, updated_at = NOW() WHERE id = ?', [$finalStatus, $device['id']]);
             Db::execute(
                 'INSERT INTO loan_events (loan_id, event_type, old_due_at, actor_id, notes)
                  VALUES (?, "cancel", ?, ?, ?)',
@@ -1057,6 +1073,25 @@ final class Loans
      * exists would itself disclose which clients other counselors are working
      * with, which is the thing being protected.
      */
+    /**
+     * Keep only the loans this person may see.
+     *
+     * For the lists that are not built through Loans::list(), which applies
+     * the same rule in SQL. A counselor sees their own caseload; every other
+     * role is unaffected, so this returns the rows untouched for them.
+     */
+    public static function visibleOnly(?array $auth, array $rows): array
+    {
+        if (Auth::ownRecordsOnly($auth) === null) {
+            return $rows;
+        }
+
+        return array_values(array_filter(
+            $rows,
+            static fn (array $loan): bool => self::isVisibleTo($auth, $loan),
+        ));
+    }
+
     public static function getVisible(?array $auth, int $organizationId, int $loanId): array
     {
         $loan = self::get($organizationId, $loanId);

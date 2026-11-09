@@ -84,7 +84,11 @@ final class Request
 
     public function queryParam(string $key, mixed $default = null): mixed
     {
-        return $this->query[$key] ?? $default;
+        // ?status[]=x arrives as an array. Nothing here takes a list, and every
+        // caller goes on to treat the value as text.
+        $value = $this->query[$key] ?? $default;
+
+        return is_array($value) ? $default : $value;
     }
 
     public function param(string $key): ?string
@@ -161,7 +165,16 @@ final class Request
         $remote    = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
         $forwarded = (string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '');
 
-        return self::resolveClientIp($remote, $forwarded, getenv('LOANER_TRUST_PROXY'));
+        // data/config.json as well as the environment. The natural place for
+        // an environment variable on shared hosting is public/.htaccess, and
+        // that file belongs to the application: the updater would refuse to
+        // run over a local edit, or replace it.
+        $trust = getenv('LOANER_TRUST_PROXY');
+        if ($trust === false && !empty(Config::get()['trustProxy'])) {
+            $trust = '1';
+        }
+
+        return self::resolveClientIp($remote, $forwarded, $trust);
     }
 
     /**

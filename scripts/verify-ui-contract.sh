@@ -370,6 +370,30 @@ contract "hygiene/queue -> workshop" "$(api GET /api/v1/hygiene/queue)" rows tot
 contract "sites -> workshop" "$(api GET /api/v1/sites)" data meta
 contract "transfers -> workshop" "$(api GET /api/v1/transfers)" data meta
 
+# The three detail screens. Every one of these failed to load at all: the device
+# screen read loan_history, which the route never returned; the loan screen read
+# .data from a response keyed by phase; the repair screen read .timeline where
+# the field is events. The suite tested the routes, and nothing tested that the
+# screens could use what the routes sent.
+DEVICE_ID=$(api GET '/api/v1/devices?per_page=1' | jqv "['data'][0]['id']")
+LOAN_ID=$(api GET '/api/v1/loans?per_page=1' | jqv "['data'][0]['id']")
+REPAIR_ID=$(api GET '/api/v1/repairs?per_page=1' | jqv "['data'][0]['id']")
+
+contract "devices/{id} -> devices.js detail" "$(api GET /api/v1/devices/$DEVICE_ID)" \
+  device.id device.name loan_history accessories waitlist
+contract "attachments/loan -> loans.js detail" "$(api GET /api/v1/attachments/loan/$LOAN_ID/list)" all
+contract "loans/{id} -> loans.js detail" "$(api GET /api/v1/loans/$LOAN_ID)" \
+  loan.id loan.reference loan.device_name loan.status loan.period_name
+contract "repairs/{id} -> workshop.js detail" "$(api GET /api/v1/repairs/$REPAIR_ID)" \
+  repair.id repair.reference repair.events repair.status_label repair.days_open
+
+# Formatted with toFixed() on three screens, so a string is a crash.
+COST_TYPE=$(api GET /api/v1/repairs/$REPAIR_ID | python3 -c '
+import sys, json
+c = json.load(sys.stdin)["repair"]["cost"]
+print("ok" if c is None or isinstance(c, (int, float)) else type(c).__name__)')
+if [ "$COST_TYPE" = "ok" ]; then pass "a repair cost is a number"; else fail "a repair cost is a number" "got $COST_TYPE"; fi
+
 rm -f "$JAR"
 
 echo

@@ -290,6 +290,18 @@ final class Requests
                     );
                 }
 
+                // "reserved" is lendable to the person it is held for, not free
+                // to be promised twice.
+                $hold = $device['status'] === 'reserved' ? Loans::holdOn($organizationId, (int) $deviceId) : null;
+
+                if ($hold !== null) {
+                    throw Util::conflict(
+                        "{$device['name']} is held for {$hold['held_for']} ({$hold['reference']}). "
+                        . 'Choose another device, or release that hold first.',
+                        ['device_id' => $deviceId, 'held_for' => $hold['held_for'], 'field' => 'device_id'],
+                    );
+                }
+
                 Db::execute('UPDATE devices SET status = "reserved", updated_at = NOW() WHERE id = ?', [$deviceId]);
             }
 
@@ -533,6 +545,15 @@ final class Requests
             'entityLabel'    => $request['reference'],
             'summary'        => "Request {$request['reference']} cancelled" . ($reason !== null ? ": {$reason}" : ''),
         ]);
+
+        // The device this request was holding may be what someone is queueing for.
+        if (!empty($request['device_id'])) {
+            try {
+                Reservations::promoteNextForDevice($actor, $organizationId, (int) $request['device_id']);
+            } catch (\Throwable $e) {
+                error_log('[requests] waitlist promotion failed: ' . $e->getMessage());
+            }
+        }
 
         return self::get($organizationId, $requestId);
     }

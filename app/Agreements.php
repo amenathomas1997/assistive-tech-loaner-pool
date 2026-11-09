@@ -186,7 +186,7 @@ final class Agreements
     {
         $organizationId = (int) $input['organizationId'];
         $loanId         = (int) $input['loanId'];
-        $method         = (string) ($input['method'] ?? 'typed');
+        $method         = Util::str($input['method'] ?? null, 32) ?? 'typed';
         $actorId        = $input['actorId'] ?? null;
 
         $settings = self::settings($organizationId);
@@ -225,7 +225,7 @@ final class Agreements
             );
         }
 
-        $role = (string) ($input['role'] ?? 'client');
+        $role = Util::str($input['role'] ?? null, 32) ?? 'client';
         if (!in_array($role, self::ROLES, true)) {
             throw Util::badRequest(
                 "\"{$role}\" is not a signer role.",
@@ -351,10 +351,10 @@ final class Agreements
      * Only meaningful when agreements are required; reported anyway so an
      * administrator can see the gap before switching the requirement on.
      */
-    public static function missing(int $organizationId): array
+    public static function missing(int $organizationId, ?array $auth = null): array
     {
         $rows = Db::all(
-            'SELECT l.id, l.reference, l.checked_out_at, l.due_at,
+            'SELECT l.id, l.reference, l.checked_out_at, l.due_at, l.client_id, l.request_id,
                     d.name AS device_name, d.barcode AS device_barcode,
                     CONCAT(c.first_name, " ", c.last_name) AS client_name,
                     u.full_name AS tech_name
@@ -368,6 +368,7 @@ final class Agreements
             [$organizationId],
         );
 
+        $rows     = Loans::visibleOnly($auth, $rows);
         $settings = self::settings($organizationId);
 
         return [
@@ -424,10 +425,11 @@ final class Agreements
 
         $title = 'Equipment loan agreement';
         $subtitle = $loan['reference'] ?? '';
+        $pageTitle = $subtitle !== '' ? "{$title} {$subtitle}" : $title;
 
         return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
             . '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            . '<title>' . Util::escapeHtml($title) . '</title><style>'
+            . '<title>' . Util::escapeHtml($pageTitle) . '</title><style>'
             . '@page{size:A4;margin:18mm}'
             . 'body{font:12pt/1.6 Georgia,"Times New Roman",serif;color:#111;max-width:170mm;margin:0 auto;padding:12mm}'
             . 'h1{font-size:17pt;margin:0 0 4mm}'
@@ -442,7 +444,7 @@ final class Agreements
             . '.typed{font-family:cursive;font-size:16pt;margin:0 0 3mm}'
             . '.waived{padding:3mm;border:1px solid #999;background:#f5f5f5}'
             . '@media print{body{padding:0}}'
-            . '</style></head><body>'
+            . '</style></head><body><main>'
             . '<h1>' . Util::escapeHtml($title) . '</h1>'
             . '<p class="org">' . Util::escapeHtml($org['name'] ?? '')
                 . ($subtitle !== '' ? ' — ' . Util::escapeHtml($subtitle) : '') . '</p>'
@@ -454,6 +456,6 @@ final class Agreements
             . '<dt>Loan reference</dt><dd>' . Util::escapeHtml($loan['reference'] ?? '') . '</dd>'
             . '<dt>Checked out</dt><dd>' . Util::escapeHtml(self::date($loan['checked_out_at'] ?? null) ?? '') . '</dd>'
             . '<dt>Due back</dt><dd>' . Util::escapeHtml(self::date($loan['due_at'] ?? null) ?? 'No fixed date') . '</dd>'
-            . '</dl></body></html>';
+            . '</dl></main></body></html>';
     }
 }

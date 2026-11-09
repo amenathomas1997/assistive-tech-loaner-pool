@@ -350,7 +350,11 @@ function renderNav() {
     }
 
     navRegion.append(el('ul', {}, visible.map((item) => {
-      const isCurrent = current === item.path || current.startsWith(`${item.path}/`);
+      // Settings and Settings / API keys both match "settings/api"; only the
+      // closer one is the current page, or the nav announces two.
+      const matches = (path) => current === path || current.startsWith(`${path}/`);
+      const isCurrent = matches(item.path) && !NAV.some((g) => g.items.some((other) =>
+        other.path.length > item.path.length && other.path.startsWith(`${item.path}/`) && matches(other.path)));
       const count = item.badge ? pendingCounts[item.badge] : 0;
 
       return el('li', {}, el('a', {
@@ -711,6 +715,7 @@ function completeSignIn(result) {
  * out — so the recovery route is on screen, not hidden behind a link.
  */
 function renderSecondFactor(login, email) {
+  document.title = 'Enter your code — Loaner Pool';
   const codeField = field({
     name: 'code',
     label: 'Six-digit code',
@@ -758,7 +763,7 @@ function renderSecondFactor(login, email) {
     },
   }, [codeField, submitButton]);
 
-  clear(root).append(el('div', { class: 'centred-page' }, [
+  clear(root).append(el('main', { class: 'centred-page', id: 'main-content', tabindex: '-1' }, [
     el('div', { class: 'centred-card' }, [
       el('div', { class: 'brand-block' }, [
         el('span', { class: 'brand-mark-lg', 'aria-hidden': 'true' }, [
@@ -799,6 +804,7 @@ function renderSecondFactor(login, email) {
 }
 
 function renderSignIn({ message = null } = {}) {
+  document.title = 'Sign in — Loaner Pool';
   const emailField = field({
     name: 'email', label: 'Email address', type: 'email', required: true,
     // SC 1.3.5 / 3.3.8 — lets a password manager identify and fill the form.
@@ -862,7 +868,7 @@ function renderSignIn({ message = null } = {}) {
     ]),
   ]);
 
-  clear(root).append(el('div', { class: 'centred-page' }, [
+  clear(root).append(el('main', { class: 'centred-page', id: 'main-content', tabindex: '-1' }, [
     el('div', { class: 'centred-card' }, [
       el('div', { class: 'brand-block' }, [
         el('span', { class: 'brand-mark-lg', 'aria-hidden': 'true' }, [
@@ -949,6 +955,7 @@ function openForgotPasswordDialog(prefill = '') {
  * Reached at #/reset?token=… before any session exists.
  */
 function renderResetPassword(token) {
+  document.title = 'Choose a new password — Loaner Pool';
   const newField = field({
     name: 'new_password', label: 'New password', type: 'password', required: true,
     help: 'At least 12 characters, with at least one number or symbol.',
@@ -998,7 +1005,7 @@ function renderResetPassword(token) {
     },
   }, [newField, confirmField, submitButton]);
 
-  clear(root).append(el('div', { class: 'centred-page' }, [
+  clear(root).append(el('main', { class: 'centred-page', id: 'main-content', tabindex: '-1' }, [
     el('div', { class: 'centred-card' }, [
       el('div', { class: 'brand-block' }, [
         el('h1', { text: 'Choose a new password' }),
@@ -1273,7 +1280,7 @@ async function boot() {
       return;
     }
 
-    clear(root).append(el('div', { class: 'centred-page' }, [
+    clear(root).append(el('main', { class: 'centred-page', id: 'main-content', tabindex: '-1' }, [
       el('div', { class: 'centred-card' }, [
         el('div', { class: 'card' }, [
           el('h1', { text: 'Loaner Pool could not start' }),

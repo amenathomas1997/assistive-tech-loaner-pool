@@ -198,6 +198,23 @@ h1 { font-size: 1.55rem; letter-spacing: -0.018em; }
 h2 { font-size: 1.19rem; }
 h3 { font-size: 1.02rem; }
 p { margin: 0 0 1em; }
+
+/*
+ * SC 1.4.8 asks for paragraph spacing of at least 1.5 times the line spacing.
+ * Line spacing here is 1.55, so 2.4em. Margins collapse, so this is the gap.
+ * Only between consecutive paragraphs: a lone line of help under a field
+ * does not need pushing away from the next control.
+ */
+p + p,
+p + p.field-help { margin-top: 2.4em; }
+
+/* The one prose line that sits outside a capped container. */
+#scan-subline,
+.modal-body p { max-width: 70ch; }
+
+/* The native controls that have no size of their own. SC 2.5.5. */
+input[type="file"] { min-height: 44px; padding-block: 10px; }
+summary { padding-block: 11px; }
 p:last-child { margin-bottom: 0; }
 
 a { color: var(--brand); text-underline-offset: 2px; }
@@ -340,8 +357,9 @@ a, button, input, select, textarea, summary,
   min-width: 44px;
   padding: 6px 13px;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  /* A dark veil, not a light one: white text on a lightened header was 5.34:1. */
+  background: rgba(0, 0, 0, 0.25);
   color: #fff;
   font: inherit;
   font-weight: 600;
@@ -349,7 +367,7 @@ a, button, input, select, textarea, summary,
   text-decoration: none;
   cursor: pointer;
 }
-.header-btn:hover { background: rgba(255, 255, 255, 0.22); }
+.header-btn:hover { background: rgba(0, 0, 0, 0.4); }
 .header-btn:focus-visible { outline-color: #fff; box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.28); }
 [data-theme="dark"] .header-btn { background: var(--surface-alt); border-color: var(--border); color: var(--text); }
 [data-theme="dark"] .header-btn:hover { background: var(--brand-soft); }
@@ -493,9 +511,9 @@ a, button, input, select, textarea, summary,
 .card-header h2, .card-header h3 { margin: 0; }
 
 .grid { display: grid; gap: 16px; }
-.grid-2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
-.grid-3 { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
-.grid-4 { grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); }
+.grid-2 { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+.grid-3 { grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); }
+.grid-4 { grid-template-columns: repeat(auto-fit, minmax(min(196px, 100%), 1fr)); }
 
 /* --- Statistic tiles ----------------------------------------------------- */
 
@@ -745,7 +763,7 @@ fieldset {
 }
 legend { font-weight: 660; padding: 0 7px; font-size: 0.92rem; }
 
-.form-grid { display: grid; gap: 0 16px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.form-grid { display: grid; gap: 0 16px; grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); }
 
 /* The glossary in the help dialog. Collapsed, because most people opening
    help want the shortcut list, and the summary row is a 44px target. */
@@ -830,14 +848,22 @@ kbd {
   color: var(--link);
   text-decoration: underline;
   cursor: pointer;
-  /* Still a 24px target even though it reads as a link in a sentence. */
-  min-height: 24px;
+  /* Reads as a link, but it is a button, and SC 2.5.5 asks for 44px. */
+  min-height: 44px;
+  min-width: 44px;
 }
 
 /* --- Tables -------------------------------------------------------------- */
 
 /* SC 1.4.10 Reflow: the table scrolls inside this box, never the page. */
 .table-wrap {
+  /*
+   * Positioned so that it is the containing block for the visually hidden text
+   * in its cells. Without this those spans, which are position:absolute, are
+   * not clipped by the scrolling wrapper, and the row's far end stretches the
+   * whole page: at 320px every table screen scrolled sideways (SC 1.4.10).
+   */
+  position: relative;
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -848,7 +874,7 @@ kbd {
 table { width: 100%; border-collapse: collapse; font-size: 0.915rem; }
 caption { text-align: left; padding: 12px 14px; font-weight: 620; color: var(--text-muted); }
 
-th, td { padding: 11px 14px; text-align: left; vertical-align: top; }
+th, td { padding: 11px 14px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 thead th {
   background: var(--surface-alt);
   border-bottom: 2px solid var(--border);
@@ -1332,7 +1358,7 @@ dialog.modal.modal-wide { max-width: min(960px, calc(100vw - 32px)); }
     border-bottom: 1px solid var(--border); padding: 8px;
     position: sticky; top: var(--header-height); z-index: 30;
   }
-  .app-nav ul { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 2px; }
+  .app-nav ul { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 2px; position: relative; }
   .app-nav li + li { margin-top: 0; }
   .app-nav a { white-space: nowrap; }
   .app-nav a[aria-current="page"]::before {
@@ -1351,6 +1377,10 @@ dialog.modal.modal-wide { max-width: min(960px, calc(100vw - 32px)); }
   .btn-group { width: 100%; }
   .btn-group .btn { flex: 1 1 auto; }
   .header-actions .header-btn span:not(.visually-hidden) { display: none; }
+  /* Decorative initials; the account name is on the Staff and Settings screens.
+     The header has to fit in 320px without scrolling sideways (SC 1.4.10). */
+  .header-actions .user-chip { display: none; }
+  .app-header { padding: 0 12px; gap: 8px; }
   .pair-code { font-size: 1.9rem; }
 }
 
@@ -1445,7 +1475,7 @@ dialog.modal.modal-wide { max-width: min(960px, calc(100vw - 32px)); }
 .colour-fields {
   display: grid;
   gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
 }
 .colour-inputs { display: flex; gap: 10px; align-items: center; }
 

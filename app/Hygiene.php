@@ -41,7 +41,10 @@ final class Hygiene
         $method = Util::str($input['method'] ?? null, 120)
             ?: (Util::str(Settings::get($organizationId, 'hygiene.default_method'), 120) ?: null);
 
-        $cleanedAt = Util::mysqlDateTime($input['cleanedAt'] ?? 'now') ?? Util::mysqlDateTime('now');
+        Loans::assertBelongs('loans', $input['loanId'] ?? null, $organizationId, 'loan');
+
+        $cleanedAt = Util::mysqlDateTime(Util::dateTime($input['cleanedAt'] ?? null, 'cleaned_at'))
+            ?? Util::mysqlDateTime('now');
 
         Db::transaction(static function () use (
             $organizationId, $deviceId, $input, $method, $cleanedAt
@@ -52,7 +55,7 @@ final class Hygiene
                  VALUES (?, ?, ?, ?, ?, ?, ?)',
                 [
                     $organizationId, $deviceId,
-                    $input['loanId'] ?? null, $method,
+                    ($input['loanId'] ?? null) ?: null, $method,
                     Util::str($input['notes'] ?? null),
                     $input['actorId'] ?? null, $cleanedAt,
                 ],
@@ -154,9 +157,11 @@ final class Hygiene
             [$organizationId, $fromSql, $toSql],
         );
 
+        // status, not just returned_at: a cancelled loan has one too, and
+        // the device never left.
         $returns = (int) Db::value(
             'SELECT COUNT(*) FROM loans
-              WHERE organization_id = ? AND returned_at >= ? AND returned_at <= ?',
+              WHERE organization_id = ? AND status = "returned" AND returned_at >= ? AND returned_at <= ?',
             [$organizationId, $fromSql, $toSql],
         );
 
