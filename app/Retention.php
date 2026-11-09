@@ -106,6 +106,10 @@ final class Retention
      * an open request or a live waitlist entry is excluded whatever the dates
      * say — they are holding equipment, or about to.
      *
+     * A loan counts from when it came back, not when it went out. Measured
+     * from the check-out, somebody who returned a device yesterday after a
+     * long loan was already "inactive" and due to be erased.
+     *
      * The waitlist was not counted at first. A client who joined it yesterday
      * after years away was eligible, and the "your device is ready" notice
      * would have gone to an address that had just been blanked.
@@ -119,7 +123,7 @@ final class Retention
         return Db::all(
             'SELECT c.id, c.first_name, c.last_name,
                     GREATEST(
-                        COALESCE((SELECT MAX(l.checked_out_at) FROM loans l WHERE l.client_id = c.id), 0),
+                        COALESCE((SELECT MAX(COALESCE(l.returned_at, l.checked_out_at)) FROM loans l WHERE l.client_id = c.id), 0),
                         COALESCE((SELECT MAX(r.created_at) FROM loan_requests r WHERE r.client_id = c.id), 0),
                         COALESCE((SELECT MAX(w.created_at) FROM reservations w WHERE w.client_id = c.id), 0),
                         c.created_at

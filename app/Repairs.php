@@ -430,7 +430,7 @@ final class Repairs
         }
         if (!empty($filters['to'])) {
             $where[]  = 'r.created_at <= ?';
-            $params[] = Util::mysqlDateTime($filters['to']);
+            $params[] = Util::endOfRange($filters['to']);
         }
         if (!empty($filters['search'])) {
             $where[] = '(r.reference LIKE ? OR r.fault LIKE ? OR r.vendor LIKE ? OR d.name LIKE ? '

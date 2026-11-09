@@ -663,9 +663,9 @@ final class AdminRoutes
         }
 
         foreach ($scopes as $scope) {
-            if (!in_array($scope, Auth::API_SCOPES, true)) {
+            if (!is_string($scope) || !in_array($scope, Auth::API_SCOPES, true)) {
                 throw Util::badRequest(
-                    "\"{$scope}\" is not a scope.",
+                    'That is not a scope.',
                     ['field' => 'scopes', 'allowed' => Auth::API_SCOPES],
                 );
             }

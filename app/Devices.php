@@ -512,6 +512,13 @@ final class Devices
             'detail'         => Audit::diff($before, $after, self::EDITABLE),
         ]);
 
+        // Whoever it was promised to goes back in the queue, keeping their
+        // place. Left "ready", they went on being told it was waiting for them
+        // while it sat in maintenance, and then lost it when the hold lapsed.
+        if ($before['status'] === 'reserved' && $after['status'] !== 'reserved') {
+            Reservations::releaseHoldsOnDevice($organizationId, $deviceId);
+        }
+
         // A device returning to service may have someone waiting for it.
         if ($before['status'] !== 'available' && $after['status'] === 'available') {
             try {

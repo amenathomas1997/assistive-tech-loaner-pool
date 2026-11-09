@@ -468,7 +468,7 @@ final class Updates
             'steps'   => [
                 'Back up the database and ' . $root . '/data.',
                 'Run the command below on the server.',
-                'Open any page in the app: schema migrations apply on the next request.',
+                'Check the output: it says whether the database was upgraded.',
             ],
             'command' => sprintf('php %s --apply', escapeshellarg($root . '/bin/update.php')),
             'notice'  => $warning,
@@ -605,7 +605,7 @@ final class Updates
      *   - a backup first, with no option to skip it from the web;
      *   - recorded in the audit log with who, from what, to what.
      */
-    public static function applyFromWeb(array $auth, ?string $password): array
+    public static function applyFromWeb(array $auth, mixed $password): array
     {
         if (($auth['actorType'] ?? '') !== 'user') {
             throw Util::forbidden(

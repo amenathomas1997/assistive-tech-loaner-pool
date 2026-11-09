@@ -307,7 +307,11 @@ final class Notifications
         $days = (int) ($l['days_until_due'] ?? 0);
 
         return [
-            'subject' => "Due in {$days} day" . ($days === 1 ? '' : 's') . " — {$l['device_name']}",
+            'subject' => match (true) {
+                $days <= 0 => 'Due today',
+                $days === 1 => 'Due tomorrow',
+                default => "Due in {$days} days",
+            } . " — {$l['device_name']}",
             'html'    => Mailer::layout('A loaned device is due back soon',
                 '<p><strong>' . Util::escapeHtml($l['device_name']) . '</strong> is due back '
                 . Util::escapeHtml(self::date($l['due_at'] ?? null) ?? 'soon') . '.</p>'

@@ -79,6 +79,18 @@ final class Util
         return $s;
     }
 
+    /**
+     * A password or code from the request body, exactly as typed.
+     *
+     * Not str(): that trims, and a space can be part of a password. Anything
+     * that is not a plain value is treated as nothing, because casting a list
+     * to text raises an error here and was a 500 for whoever sent one.
+     */
+    public static function text(mixed $value): string
+    {
+        return is_scalar($value) ? (string) $value : '';
+    }
+
     public static function str(mixed $value, int $max = 65535, bool $trim = true): ?string
     {
         if ($value === null || is_array($value) || is_object($value)) {
@@ -403,6 +415,20 @@ final class Util
             }
         }
         return $date->format('Y-m-d H:i:s');
+    }
+
+    /**
+     * The upper bound of a date filter.
+     *
+     * "To 9 November" means through the end of that day. Read as a timestamp
+     * it was midnight at the start of it, so that whole day was left out, and
+     * From and To on the same date found nothing at all.
+     */
+    public static function endOfRange(mixed $value): ?string
+    {
+        $text = is_string($value) ? trim($value) : '';
+
+        return self::mysqlDateTime(preg_match('/^\d{4}-\d{2}-\d{2}$/', $text) ? "{$text} 23:59:59" : $text);
     }
 
     public static function addDays(\DateTimeInterface $date, int $days): \DateTimeImmutable

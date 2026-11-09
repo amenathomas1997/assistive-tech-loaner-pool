@@ -36,6 +36,7 @@ final class SecurityRoutes
         $router->post('/auth/2fa/confirm', [self::class, 'confirm']);
         $router->post('/auth/2fa/disable', [self::class, 'disable']);
         $router->post('/auth/2fa/recovery-codes', [self::class, 'regenerateRecoveryCodes']);
+        $router->post('/users/{id}/reset-2fa', [self::class, 'resetForColleague'], 'users.write');
 
         // --- Backups ---------------------------------------------------------
         $router->get('/admin/backup', [self::class, 'backupSummary'], 'settings.read');
@@ -249,10 +250,82 @@ final class SecurityRoutes
 
         $codes = Totp::issueRecoveryCodes((int) $auth['userId']);
 
+        Audit::record(Audit::actor($request), [
+            'action'      => Audit::TWOFACTOR_CODES_REISSUED,
+            'entityType'  => 'user',
+            'entityId'    => (int) $auth['userId'],
+            'entityLabel' => $auth['fullName'] ?? null,
+            'summary'     => ($auth['fullName'] ?? 'Someone') . ' generated new two-factor recovery codes',
+        ]);
+
         Response::json([
             'recovery_codes' => $codes,
             'notice' => 'These replace your previous codes, which no longer work. Save them somewhere '
                       . 'safe and away from your phone.',
+        ]);
+    }
+
+    /**
+     * Take two-factor off a colleague who has lost their phone and their codes.
+     *
+     * The sign-in screen tells them to ask an administrator for exactly this,
+     * and until now there was nothing for the administrator to press: a lost
+     * phone meant editing the database by hand.
+     *
+     * It removes a protection from somebody else's account, so it asks for the
+     * administrator's own password and needs a person rather than an API key.
+     * Not for one's own account, which has its own route, because the person
+     * who can use this is by definition already signed in.
+     */
+    public static function resetForColleague(Request $request): never
+    {
+        $auth     = self::requireOwnAccount($request);
+        $targetId = (int) $request->param('id');
+
+        self::confirmPassword($auth, $request->input('password'));
+
+        if ($targetId === (int) $auth['userId']) {
+            throw Util::badRequest('Use your own two-factor settings to change your own account.');
+        }
+
+        $target = Db::one(
+            'SELECT id, full_name, email, totp_enabled FROM users WHERE id = ? AND organization_id = ?',
+            [$targetId, $auth['organizationId']],
+        );
+
+        if ($target === null) {
+            throw Util::notFound('That account does not exist.');
+        }
+
+        if (empty($target['totp_enabled'])) {
+            throw Util::conflict("{$target['full_name']} does not have two-factor sign-in turned on.");
+        }
+
+        Db::transaction(static function () use ($targetId): void {
+            Db::execute(
+                'UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_pending_secret = NULL,
+                        totp_confirmed_at = NULL, totp_last_counter = NULL,
+                        failed_logins = 0, locked_until = NULL
+                  WHERE id = ?',
+                [$targetId],
+            );
+            Db::execute('DELETE FROM totp_recovery_codes WHERE user_id = ?', [$targetId]);
+            Db::execute('DELETE FROM pending_logins WHERE user_id = ?', [$targetId]);
+            Auth::destroyAllSessionsForUser($targetId);
+        });
+
+        Audit::record(Audit::actor($request), [
+            'action'      => Audit::TWOFACTOR_DISABLED,
+            'entityType'  => 'user',
+            'entityId'    => $targetId,
+            'entityLabel' => $target['full_name'],
+            'summary'     => ($auth['fullName'] ?? 'An administrator') . ' reset two-factor sign-in for '
+                           . $target['full_name'],
+        ]);
+
+        Response::json([
+            'enabled' => false,
+            'message' => "{$target['full_name']} can now sign in with their password and set up two-factor again.",
         ]);
     }
 

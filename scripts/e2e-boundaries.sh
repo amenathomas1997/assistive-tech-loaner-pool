@@ -469,6 +469,148 @@ ids = [row["id"] for line in sys.stdin if line.strip() for row in json.loads(lin
 print(len(ids), len(set(ids)))')
 eq 'three pages of identically named devices hold six different devices' "$SEEN" '6 6'
 
+# ---------------------------------------------------------------------------
+# Sixth audit
+# ---------------------------------------------------------------------------
+
+# Direct writes, for states that take days to arrive by themselves. This script
+# only ever runs against the throwaway database reset-and-test.sh creates.
+sql() { php -r '
+  $c = json_decode(file_get_contents("data/config.json"), true); $d = $c["db"];
+  if ($d["database"] !== "loanerpool_test") { fwrite(STDERR, "refusing: not the test database\n"); exit(1); }
+  (new PDO("mysql:host={$d["host"]};port={$d["port"]};dbname={$d["database"]}", $d["user"], $d["password"]))->exec($argv[1]);
+' "$1"; }
+totp() { php -r 'require "app/Totp.php"; echo Loaner\Totp::codeAt($argv[1], time() + (int) $argv[2]);' "$1" "$2"; }
+new_client() { local body="{\"first_name\":\"$1\",\"last_name\":\"$TAG-$2\"}"; api "$ADMIN" POST /clients "$body" | jqv client.id; }
+lend() { local body="{\"device\":$1,\"client_id\":$2,\"custom_days\":$3}"; api "$ADMIN" POST /loans/checkout "$body" | jqv loan.id; }
+
+# Two-factor guesses are limited per account, not per typed password.
+TF_MAIL="tf$RANDOM@example.org"; TF_JAR=$(mktemp)
+TF_ID=$(staff "Two Factor" "$TF_MAIL" tech)
+TF_LOGIN="{\"email\":\"$TF_MAIL\",\"password\":\"$PASSWORD\"}"
+api "$TF_JAR" POST /auth/login "$TF_LOGIN" > /dev/null
+TF_SECRET=$(api "$TF_JAR" POST /auth/2fa/begin '{}' | jqv secret)
+TF_CONFIRM="{\"code\":\"$(totp "$TF_SECRET" 0)\"}"
+api "$TF_JAR" POST /auth/2fa/confirm "$TF_CONFIRM" > /dev/null
+TF_REISSUE="{\"password\":\"$PASSWORD\"}"
+api "$TF_JAR" POST /auth/2fa/recovery-codes "$TF_REISSUE" > /dev/null
+eq 'new recovery codes are recorded in the audit log' \
+   "$(api "$ADMIN" GET "/audit?search=recovery%20codes&action_prefix=auth&per_page=1" | jqv data.0.action)" auth.twofactor_codes_reissued
+rm -f "$TF_JAR"
+pending() { api "$TF_JAR" POST /auth/login "$TF_LOGIN" | jqv pending_id; }
+guess() { local body="{\"pending_id\":\"$1\",\"code\":\"000000\"}"; code "$TF_JAR" POST /auth/login/verify "$body"; }
+
+P=$(pending)
+guess "$P" > /dev/null; guess "$P" > /dev/null; guess "$P" > /dev/null
+TF_GOOD="{\"pending_id\":\"$P\",\"code\":\"$(totp "$TF_SECRET" 30)\"}"
+eq 'a right code still works after a few wrong ones'        "$(code "$TF_JAR" POST /auth/login/verify "$TF_GOOD")" 200
+P=$(pending)
+for _ in 1 2 3 4 5; do guess "$P" > /dev/null; done
+P=$(pending)
+guess "$P" > /dev/null
+eq 'the count starts again after a successful sign-in'      "$(guess "$P")" 401
+eq 'the guess that reaches the limit locks the account'     "$(guess "$P")" 423
+eq 'and the right password no longer starts a sign-in'      "$(code "$TF_JAR" POST /auth/login "$TF_LOGIN")" 423
+
+# An administrator can get a colleague back in, carefully.
+RESET_WRONG='{"password":"not-the-password-1"}'
+RESET_RIGHT="{\"password\":\"$PASSWORD\"}"
+eq 'resetting a colleague needs the right password'         "$(code "$ADMIN" POST "/users/$TF_ID/reset-2fa" "$RESET_WRONG")" 400
+eq 'a technician cannot reset anyone'                       "$(code "$TECH" POST "/users/$TF_ID/reset-2fa" "$RESET_RIGHT")" 403
+eq 'the staff list says who has it on'                      "$(api "$ADMIN" GET "/users/$TF_ID" | jqv user.totp_enabled)" True
+eq 'an administrator can reset a colleague'                 "$(code "$ADMIN" POST "/users/$TF_ID/reset-2fa" "$RESET_RIGHT")" 200
+eq 'which clears the lock too, and asks for no code'        "$(api "$TF_JAR" POST /auth/login "$TF_LOGIN" | jqv user.email)" "$TF_MAIL"
+eq 'resetting it twice says there is nothing to reset'      "$(code "$ADMIN" POST "/users/$TF_ID/reset-2fa" "$RESET_RIGHT")" 409
+ADMIN_ID=$(api "$ADMIN" GET /auth/me | jqv user.id)
+eq 'and nobody resets their own this way'                   "$(code "$ADMIN" POST "/users/$ADMIN_ID/reset-2fa" "$RESET_RIGHT")" 400
+rm -f "$TF_JAR"
+
+# Due dates, counted the way people count them.
+DUE_DEVICE=$(device); DUE_CLIENT=$(new_client Due Dates)
+DUE_LOAN=$(lend "$DUE_DEVICE" "$DUE_CLIENT" 7)
+eq 'a seven-day loan is due in seven days'                  "$(api "$ADMIN" GET "/loans/$DUE_LOAN" | jqv loan.days_until_due)" 7
+DUE_BEFORE=$(api "$ADMIN" GET "/loans/$DUE_LOAN" | jqv loan.due_at)
+BLANK_DUE='{"new_due_at":""}'
+eq 'a blank date is refused'                                "$(code "$ADMIN" POST "/loans/$DUE_LOAN/extend" "$BLANK_DUE")" 400
+eq 'and does not make the loan due today'                   "$(api "$ADMIN" GET "/loans/$DUE_LOAN" | jqv loan.due_at)" "$DUE_BEFORE"
+
+# A notice sent yesterday, a moment later than this morning's run.
+sql "UPDATE loans SET due_at = DATE_SUB(NOW(), INTERVAL 5 DAY) WHERE id = $DUE_LOAN"
+sql "INSERT INTO loan_events (loan_id, event_type, notes, created_at) VALUES ($DUE_LOAN, 'overdue_notice', 'test', DATE_SUB(NOW(), INTERVAL 86390 SECOND))"
+OVERDUE_IDS=$(api "$ADMIN" GET /loans/overdue | python3 -c 'import sys,json; print(" ".join(str(r["id"]) for r in json.load(sys.stdin)["data"]))')
+case " $OVERDUE_IDS " in *" $DUE_LOAN "*) pass 'a loan chased yesterday is still overdue today';; *) fail 'a loan chased yesterday is still overdue today';; esac
+
+# The end of a date filter includes that day.
+TODAY=$(php -r 'echo date("Y-m-d");')
+eq 'the audit log filtered to today finds today'            "$([ "$(api "$ADMIN" GET "/audit?from=$TODAY&to=$TODAY&per_page=1" | jqv meta.total)" -gt 0 ] && echo yes)" yes
+
+# Lending over a request's hold does not lose the request.
+HELD=$(device); OWNER=$(new_client Request Owner); WALKIN=$(new_client Walk In)
+HELD_REQ_BODY="{\"client_id\":$OWNER,\"device_id\":$HELD,\"justification\":\"y\"}"
+HELD_REQ=$(api "$ADMIN" POST /requests "$HELD_REQ_BODY" | jqv request.id)
+HELD_APPROVE="{\"device_id\":$HELD}"
+api "$ADMIN" POST "/requests/$HELD_REQ/approve" "$HELD_APPROVE" > /dev/null
+OVERRIDE_BODY="{\"device\":$HELD,\"client_id\":$WALKIN,\"custom_days\":7,\"override_hold\":true}"
+HELD_LOAN=$(api "$ADMIN" POST /loans/checkout "$OVERRIDE_BODY" | jqv loan.id)
+HELD_IN="{\"loan_id\":$HELD_LOAN}"
+api "$ADMIN" POST /loans/checkin "$HELD_IN" > /dev/null
+eq 'a device lent over a request hold is held again on return' "$(status_of "$HELD")" reserved
+eq 'for the request that is still waiting'                  "$(api "$ADMIN" GET "/requests/$HELD_REQ" | jqv request.status)" approved
+
+# Editing a promised device by hand puts the person back in the queue.
+PROMISED=$(device); HOLDER=$(new_client Current Holder); NEXT=$(new_client Next Inline)
+PROMISED_LOAN=$(lend "$PROMISED" "$HOLDER" 7)
+PROMISED_WAIT="{\"device_id\":$PROMISED,\"client_id\":$NEXT}"
+PROMISED_RES=$(api "$ADMIN" POST /reservations "$PROMISED_WAIT" | jqv reservation.id)
+PROMISED_IN="{\"loan_id\":$PROMISED_LOAN}"
+api "$ADMIN" POST /loans/checkin "$PROMISED_IN" > /dev/null
+eq 'the waitlist holds the returned device'                 "$(api "$ADMIN" GET "/reservations/$PROMISED_RES" | jqv reservation.status)" ready
+TO_MAINT='{"status":"maintenance"}'
+api "$ADMIN" PATCH "/devices/$PROMISED" "$TO_MAINT" > /dev/null
+eq 'marking it for maintenance returns them to the queue'   "$(api "$ADMIN" GET "/reservations/$PROMISED_RES" | jqv reservation.status)" waiting
+TO_AVAILABLE='{"status":"available"}'
+api "$ADMIN" PATCH "/devices/$PROMISED" "$TO_AVAILABLE" > /dev/null
+eq 'and bringing it back offers it to them again'           "$(api "$ADMIN" GET "/reservations/$PROMISED_RES" | jqv reservation.status)" ready
+
+# Retention counts from when the device came back.
+OLD_CLIENT=$(new_client Long Loan); OLD_DEVICE=$(device)
+OLD_LOAN=$(lend "$OLD_DEVICE" "$OLD_CLIENT" 7)
+OLD_IN="{\"loan_id\":$OLD_LOAN}"
+api "$ADMIN" POST /loans/checkin "$OLD_IN" > /dev/null
+sql "UPDATE loans SET checked_out_at = DATE_SUB(NOW(), INTERVAL 9 YEAR) WHERE id = $OLD_LOAN"
+sql "UPDATE clients SET created_at = DATE_SUB(NOW(), INTERVAL 9 YEAR) WHERE id = $OLD_CLIENT"
+RETAIN_SEVEN='{"settings":{"retention.client_years":7}}'
+api "$ADMIN" PATCH /admin/settings "$RETAIN_SEVEN" > /dev/null
+RETAIN_HITS=$(api "$ADMIN" GET /admin/retention | python3 -c 'import sys,json; print(sum(1 for s in json.load(sys.stdin)["clients"]["sample"] if s["id"]=='"$OLD_CLIENT"'))')
+eq 'someone who returned a device yesterday is not inactive' "$RETAIN_HITS" 0
+
+# Several seats out: the barcode alone cannot say whose is coming back.
+SEAT_BODY="{\"name\":\"$TAG seats\",\"category\":\"$TAG-seats\",\"item_type\":\"licence\",\"seats_total\":3}"
+SEATS=$(api "$ADMIN" POST /devices "$SEAT_BODY" | jqv device.id)
+SEAT_BARCODE=$(api "$ADMIN" GET "/devices/$SEATS" | jqv device.barcode)
+SEAT_A=$(new_client Seat Alpha); SEAT_B=$(new_client Seat Beta)
+SEAT_LOAN_A=$(lend "$SEATS" "$SEAT_A" 7); SEAT_LOAN_B=$(lend "$SEATS" "$SEAT_B" 7)
+SEAT_SCAN="{\"barcode\":\"$SEAT_BARCODE\"}"
+eq 'a barcode with several seats out needs a named loan'    "$(code "$ADMIN" POST /loans/checkin "$SEAT_SCAN")" 409
+eq 'and neither loan was ended by trying'                   "$(api "$ADMIN" GET "/loans/$SEAT_LOAN_A" | jqv loan.status)" active
+SEAT_IN="{\"loan_id\":$SEAT_LOAN_B}"
+eq 'naming the loan ends that loan'                         "$(code "$ADMIN" POST /loans/checkin "$SEAT_IN")" 200
+
+# A list where one value belongs is a bad request, not a crash.
+while IFS='|' read -r method path body; do
+  got=$(code "$ADMIN" "$method" "$path" "$body")
+  case "$got" in 500) fail "malformed $path" "got 500 for $body";; *) pass "malformed $path is refused cleanly";; esac
+done <<'MALFORMED'
+POST|/loans/checkin|{"barcode":[1]}
+POST|/admin/api-keys|{"name":"k","scopes":[[1]]}
+POST|/admin/backup|{"password":123}
+POST|/admin/updates/apply|{"password":[1]}
+POST|/auth/login|{"email":"a@b.co","password":[1]}
+POST|/auth/login/verify|{"pending_id":"x","code":[1]}
+POST|/auth/change-password|{"current_password":[1],"new_password":"x"}
+POST|/auth/reset-password|{"token":"x","new_password":[1]}
+MALFORMED
+
 rm -f "$ADMIN" "$VRC" "$TECH"
 
 echo

@@ -207,6 +207,7 @@ export const api = {
   createUser: (body) => request('POST', '/users', { body }),
   updateUser: (id, body) => request('PATCH', `/users/${id}`, { body }),
   resetUserPassword: (id, body) => request('POST', `/users/${id}/reset-password`, { body }),
+  resetUserTwoFactor: (id, body) => request('POST', `/users/${id}/reset-2fa`, { body }),
 
   // --- Admin --------------------------------------------------------------
   organization: () => request('GET', '/admin/organization'),

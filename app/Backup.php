@@ -57,7 +57,7 @@ final class Backup
      * host's memory limit, and the failure mode would be a blank page at the
      * moment somebody needed a backup.
      */
-    public static function stream(array $auth, ?string $password): never
+    public static function stream(array $auth, mixed $password): never
     {
         self::assertAllowed($auth, $password);
 
@@ -117,7 +117,7 @@ final class Backup
      * The same gates as installing an update, and for the same reason: this
      * hands over every client record and every password hash in one file.
      */
-    private static function assertAllowed(array $auth, ?string $password): void
+    private static function assertAllowed(array $auth, mixed $password): void
     {
         if (($auth['actorType'] ?? '') !== 'user') {
             throw Util::forbidden(

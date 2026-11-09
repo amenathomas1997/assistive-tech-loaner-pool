@@ -449,8 +449,16 @@ final class Kits
                     'actorId'        => $input['actorId'] ?? null,
                 ]);
             } catch (\Throwable $e) {
+                // Only messages written for people. Anything else is a fault,
+                // and its text may be SQL or a file path.
+                if (!$e instanceof HttpError) {
+                    error_log('[group check-in] ' . $e->getMessage());
+                }
+
                 $failed[] = ['loan_id' => (int) $loan['id'], 'reference' => $loan['reference'],
-                             'reason' => $e->getMessage()];
+                             'reason' => $e instanceof HttpError
+                                 ? $e->getMessage()
+                                 : 'That one failed on the server. Try it again on its own.'];
             }
         }
 

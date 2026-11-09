@@ -444,7 +444,7 @@ final class Directory
     private const USER_SELECT = '
         SELECT u.id, u.organization_id, u.email, u.full_name, u.role, u.phone, u.employee_ref,
                u.badge_barcode, u.active, u.must_change_password, u.locked_until, u.last_login_at,
-               u.created_at, u.updated_at, (u.entra_oid IS NOT NULL) AS sso_linked,
+               u.created_at, u.updated_at, (u.entra_oid IS NOT NULL) AS sso_linked, u.totp_enabled,
                (SELECT COUNT(*) FROM loans l WHERE l.tech_id = u.id AND l.status = "active")
                    AS active_loan_count,
                (SELECT COUNT(*) FROM loan_requests r WHERE r.requested_by = u.id
@@ -468,6 +468,7 @@ final class Directory
         $row['locked']               = !empty($row['locked_until'])
             && strtotime((string) $row['locked_until']) > time();
         $row['capabilities']         = Auth::capabilitiesForRole($row['role']);
+        $row['totp_enabled']         = (bool) $row['totp_enabled'];
         $row['active_loan_count']    = (int) $row['active_loan_count'];
         $row['open_request_count']   = (int) $row['open_request_count'];
 

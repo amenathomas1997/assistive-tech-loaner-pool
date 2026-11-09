@@ -325,10 +325,15 @@ final class Auth
             return ['ok' => false, 'reason' => 'bad_password', 'user' => $user];
         }
 
-        Db::execute(
-            'UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?',
-            [$user['id']],
-        );
+        // Not cleared yet if a code is still to come. A correct password wiped
+        // the count, and each one bought five fresh guesses, so somebody who
+        // had the password could try codes for as long as they liked.
+        if (!self::needsSecondFactor($user)) {
+            Db::execute(
+                'UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?',
+                [$user['id']],
+            );
+        }
 
         // After the password check, so only somebody who knows the password
         // learns that this account has to use Microsoft instead.
@@ -459,7 +464,7 @@ final class Auth
             'SELECT p.attempts, p.expires_at,
                     u.id AS user_id, u.organization_id, u.email, u.full_name, u.role,
                     u.active, u.must_change_password, u.totp_secret, u.totp_enabled,
-                    u.totp_last_counter
+                    u.totp_last_counter, u.failed_logins, u.locked_until
                FROM pending_logins p JOIN users u ON u.id = p.user_id
               WHERE p.id = ? AND p.expires_at > NOW()',
             [Util::sha256($pendingId)],
@@ -472,6 +477,12 @@ final class Auth
         if ((int) $pending['attempts'] >= self::MAX_TOTP_ATTEMPTS) {
             Db::execute('DELETE FROM pending_logins WHERE id = ?', [Util::sha256($pendingId)]);
             return ['ok' => false, 'reason' => 'too_many_attempts'];
+        }
+
+        // A lock that landed after this attempt began still applies to it.
+        if ($pending['locked_until'] !== null && strtotime((string) $pending['locked_until']) > time()) {
+            Db::execute('DELETE FROM pending_logins WHERE id = ?', [Util::sha256($pendingId)]);
+            return ['ok' => false, 'reason' => 'locked', 'lockedUntil' => $pending['locked_until']];
         }
 
         $secret = Secrets::decrypt((string) $pending['totp_secret']);
@@ -498,6 +509,28 @@ final class Auth
                     [Util::sha256($pendingId)],
                 );
 
+                // Counted against the account as well as this attempt. The
+                // attempt's own limit resets with every new password entry; the
+                // account's does not, so guesses cannot be bought indefinitely.
+                $failed = self::failedLoginsAfterMiss((int) $pending['failed_logins'], $pending['locked_until']);
+
+                if ($failed >= self::MAX_FAILED_LOGINS) {
+                    $until = Util::mysqlDateTime(new \DateTimeImmutable('+' . self::LOCKOUT_MINUTES . ' minutes'));
+
+                    Db::execute(
+                        'UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?',
+                        [$failed, $until, $pending['user_id']],
+                    );
+                    Db::execute('DELETE FROM pending_logins WHERE id = ?', [Util::sha256($pendingId)]);
+
+                    return ['ok' => false, 'reason' => 'locked', 'user' => $pending, 'lockedUntil' => $until];
+                }
+
+                Db::execute(
+                    'UPDATE users SET failed_logins = ?, locked_until = NULL WHERE id = ?',
+                    [$failed, $pending['user_id']],
+                );
+
                 return [
                     'ok'        => false,
                     'reason'    => 'bad_code',
@@ -510,7 +543,10 @@ final class Auth
         }
 
         Db::execute('DELETE FROM pending_logins WHERE id = ?', [Util::sha256($pendingId)]);
-        Db::execute('UPDATE users SET last_login_at = NOW() WHERE id = ?', [$pending['user_id']]);
+        Db::execute(
+            'UPDATE users SET last_login_at = NOW(), failed_logins = 0, locked_until = NULL WHERE id = ?',
+            [$pending['user_id']],
+        );
 
         // Built explicitly, so what comes back is unambiguously a user row.
         return [

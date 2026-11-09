@@ -60,6 +60,7 @@ final class Audit
     public const TWOFACTOR_DISABLED = 'auth.twofactor_disabled';
     public const TWOFACTOR_FAILED   = 'auth.twofactor_failed';
     public const TWOFACTOR_RECOVERY_USED = 'auth.twofactor_recovery_used';
+    public const TWOFACTOR_CODES_REISSUED = 'auth.twofactor_codes_reissued';
 
     public const RETENTION_PURGE = 'retention.purge';
 
@@ -212,7 +213,7 @@ final class Audit
         }
         if (!empty($filters['to'])) {
             $where[] = 'a.created_at <= ?';
-            $params[] = Util::mysqlDateTime($filters['to']);
+            $params[] = Util::endOfRange($filters['to']);
         }
         if (!empty($filters['search'])) {
             $where[] = '(a.summary LIKE ? OR a.entity_label LIKE ? OR a.actor_label LIKE ?)';

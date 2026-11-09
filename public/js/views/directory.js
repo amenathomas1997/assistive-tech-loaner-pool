@@ -410,6 +410,12 @@ export async function renderStaff() {
                     type: 'button', class: 'btn btn-sm',
                     onClick: () => openResetPasswordDialog(u),
                   }, ['Reset password', el('span', { class: 'visually-hidden' }, ` for ${u.full_name}`)]),
+                  u.totp_enabled && u.id !== session.user?.id
+                    ? el('button', {
+                        type: 'button', class: 'btn btn-sm',
+                        onClick: () => openResetTwoFactorDialog(u, load),
+                      }, ['Reset two-factor', el('span', { class: 'visually-hidden' }, ` for ${u.full_name}`)])
+                    : null,
                 ])
               : el('span', { class: 'muted' }, '—'),
           },
@@ -515,6 +521,46 @@ async function openUserDialog(user, onDone) {
               target.setError(err.message);
               target.control.focus();
             } else { toastError(err.message); }
+          }
+        },
+      },
+    ],
+  });
+}
+
+async function openResetTwoFactorDialog(user, onDone) {
+  const passwordField = field({
+    name: 'password', label: 'Your password', type: 'password', required: true,
+    help: 'Your own password, not theirs.',
+    autocomplete: 'current-password',
+  });
+
+  return modal({
+    title: `Reset two-factor for ${user.full_name}`,
+    body: el('div', {}, [
+      el('p', {
+        text:
+          'For somebody who has lost their phone and their recovery codes. Their authenticator and ' +
+          'recovery codes stop working, they are signed out everywhere, and they can sign in with ' +
+          'just their password until they set it up again. Be sure you know who is asking.',
+      }),
+      passwordField,
+    ]),
+    actions: [
+      { label: 'Cancel', class: 'btn-ghost', value: null },
+      {
+        label: 'Reset two-factor',
+        class: 'btn-danger',
+        onClick: async (close) => {
+          passwordField.setError(null);
+          try {
+            const result = await api.resetUserTwoFactor(user.id, { password: passwordField.control.value });
+            toastOk(result.message);
+            close(true);
+            onDone?.();
+          } catch (err) {
+            passwordField.setError(err.message);
+            passwordField.control.focus();
           }
         },
       },

@@ -44,7 +44,7 @@ final class Authentication
     public static function login(Request $request): never
     {
         $email    = Util::email($request->input('email'), 'Email address', true);
-        $password = (string) ($request->input('password') ?? '');
+        $password = Util::text($request->input('password'));
 
         if ($password === '') {
             throw Util::badRequest('Enter your password.', ['field' => 'password']);
@@ -172,7 +172,7 @@ final class Authentication
     public static function verifySecondFactor(Request $request): never
     {
         $pendingId = Util::str($request->input('pending_id'), 128);
-        $code      = (string) ($request->input('code') ?? '');
+        $code      = Util::text($request->input('code'));
 
         if ($pendingId === null) {
             throw Util::badRequest('Start signing in again.', ['field' => 'pending_id']);
@@ -200,6 +200,16 @@ final class Authentication
                         'entityId'   => (int) $result['user']['user_id'],
                         'summary'    => 'Wrong two-factor code on sign-in',
                     ],
+                );
+            }
+
+            if ($result['reason'] === 'locked') {
+                Response::error(
+                    423,
+                    'account_locked',
+                    'This account is temporarily locked after too many wrong codes. Try again after '
+                    . date('g:i a', strtotime((string) $result['lockedUntil']))
+                    . ', or ask an administrator to unlock it.',
                 );
             }
 
@@ -323,9 +333,9 @@ final class Authentication
             throw Util::badRequest('API keys do not have passwords.');
         }
 
-        $current = (string) ($request->input('current_password') ?? '');
-        $new     = (string) ($request->input('new_password') ?? '');
-        $confirm = (string) ($request->input('confirm_password') ?? $new);
+        $current = Util::text($request->input('current_password'));
+        $new     = Util::text($request->input('new_password'));
+        $confirm = Util::text($request->input('confirm_password') ?? $new);
 
         if ($new !== $confirm) {
             throw Util::badRequest('The two new passwords do not match.', ['field' => 'confirm_password']);
@@ -464,8 +474,8 @@ final class Authentication
     public static function resetPassword(Request $request): never
     {
         $token   = Util::str($request->input('token'), 128);
-        $new     = (string) ($request->input('new_password') ?? '');
-        $confirm = (string) ($request->input('confirm_password') ?? $new);
+        $new     = Util::text($request->input('new_password'));
+        $confirm = Util::text($request->input('confirm_password') ?? $new);
 
         if ($token === null) {
             throw Util::badRequest('That reset link is missing its token.', ['field' => 'token']);

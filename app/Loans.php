@@ -434,6 +434,15 @@ final class Loans
                 }
             }
 
+            // On the loan's own timeline, because it is what tells the return
+            // that this device is owed back to somebody.
+            if ($hold !== null && $hold['kind'] === 'request' && $holdOutcome === 'overridden') {
+                Db::execute(
+                    'INSERT INTO loan_events (loan_id, event_type, actor_id, notes) VALUES (?, "note", ?, ?)',
+                    [$loanId, $actorId, self::overrideNote((string) $hold['reference'])],
+                );
+            }
+
             return ['loanId' => $loanId, 'reference' => $reference, 'device' => $locked,
                     'dueAt' => $dueAt, 'days' => $days, 'hold' => $hold, 'holdOutcome' => $holdOutcome,
                     'requestId' => $requestId];
@@ -551,6 +560,45 @@ final class Loans
         // Reserved, but nothing live claims it — a hold that was cleaned up
         // incompletely. Not a reason to refuse anyone.
         return null;
+    }
+
+    /**
+     * Where a device that has just come back should go.
+     *
+     * Lending a device over an approved request's hold tells the desk the
+     * person "will go back to waiting". Nothing did that: the request stayed
+     * approved while the returned device went onto the open shelf, for the
+     * next walk-in or the waitlist to take.
+     *
+     * Only for the loan that actually took the device from that request. An
+     * approval that named a device without reserving it never held it, and
+     * must not jump ahead of people on the waitlist when it comes back.
+     *
+     * Runs inside the caller's transaction, after the loan has ended.
+     */
+    private static function keepRequestHold(int $organizationId, array $loan, string $status): string
+    {
+        if ($status !== 'available') {
+            return $status;
+        }
+
+        $hold = self::holdOn($organizationId, (int) $loan['device_id']);
+
+        if ($hold === null || $hold['kind'] !== 'request') {
+            return $status;
+        }
+
+        $tookIt = Db::value(
+            'SELECT id FROM loan_events WHERE loan_id = ? AND event_type = "note" AND notes = ? LIMIT 1',
+            [$loan['id'], self::overrideNote((string) $hold['reference'])],
+        );
+
+        return $tookIt !== null ? 'reserved' : $status;
+    }
+
+    private static function overrideNote(string $requestReference): string
+    {
+        return "Lent over the hold for request {$requestReference}.";
     }
 
     private static function holderName(array $row): string
@@ -680,7 +728,24 @@ final class Loans
                     );
                 }
                 $device = Db::one('SELECT * FROM devices WHERE id = ? FOR UPDATE', [$device['id']]);
-                $loan   = self::activeLoanForDevice((int) $device['id'], true);
+
+                // A licence with several seats out has several holders, and
+                // the barcode cannot say which one is coming back. Taking the
+                // first row ended somebody else's loan.
+                $open = (int) Db::value(
+                    'SELECT COUNT(*) FROM loans WHERE device_id = ? AND status = "active"',
+                    [$device['id']],
+                );
+
+                if ($open > 1) {
+                    throw Util::conflict(
+                        "{$device['name']} has {$open} seats out. Choose which loan is ending rather than "
+                        . 'scanning the barcode.',
+                        ['device_id' => (int) $device['id'], 'active_loans' => $open, 'loan_required' => true],
+                    );
+                }
+
+                $loan = self::activeLoanForDevice((int) $device['id'], true);
             }
 
             if ($loan === null) {
@@ -740,6 +805,8 @@ final class Loans
             if ($resolvedStatus === 'available' && !empty($device['active_repair_id'])) {
                 $resolvedStatus = 'maintenance';
             }
+
+            $resolvedStatus = self::keepRequestHold($organizationId, $loan, $resolvedStatus);
 
             // Flagged for cleaning on the way back in, not on the way out:
             // this is the moment it stopped being with someone.
@@ -978,6 +1045,8 @@ final class Loans
                 ? 'maintenance'
                 : $deviceStatus;
 
+            $finalStatus = self::keepRequestHold($organizationId, $loan, $finalStatus);
+
             Db::execute('UPDATE devices SET status = ?, updated_at = NOW() WHERE id = ?', [$finalStatus, $device['id']]);
             Db::execute(
                 'INSERT INTO loan_events (loan_id, event_type, old_due_at, actor_id, notes)
@@ -1185,8 +1254,11 @@ final class Loans
         $dueAt   = $loan['due_at'] !== null ? strtotime((string) $loan['due_at']) : null;
 
         $loan['is_overdue']     = $overdue;
+        // Calendar days, not elapsed ones. Loans fall due at 23:59:59, so
+        // rounding the elapsed time up counted today as a whole day: a loan
+        // due tonight was "due in 1 day" and one due tomorrow "in 2".
         $loan['days_until_due'] = ($dueAt !== null && $loan['status'] === 'active')
-            ? (int) ceil(($dueAt - $now) / 86400)
+            ? (int) round((strtotime(date('Y-m-d', $dueAt)) - strtotime('today')) / 86400)
             : null;
         $loan['days_overdue']   = $overdue ? (int) ceil(($now - $dueAt) / 86400) : 0;
         $loan['client_name']    = !empty($loan['client_first_name'])
@@ -1252,7 +1324,7 @@ final class Loans
         }
 
         if (!empty($filters['from'])) { $where[] = 'l.checked_out_at >= ?'; $params[] = Util::mysqlDateTime($filters['from']); }
-        if (!empty($filters['to']))   { $where[] = 'l.checked_out_at <= ?'; $params[] = Util::mysqlDateTime($filters['to']); }
+        if (!empty($filters['to']))   { $where[] = 'l.checked_out_at <= ?'; $params[] = Util::endOfRange($filters['to']); }
 
         if (!empty($filters['search'])) {
             $where[] = '(l.reference LIKE ? OR d.name LIKE ? OR d.barcode LIKE ? OR d.asset_tag LIKE ? '
@@ -1295,11 +1367,6 @@ final class Loans
                 AND l.due_at IS NOT NULL
                 AND l.due_at >= NOW()
                 AND l.due_at <= DATE_ADD(NOW(), INTERVAL ? DAY)
-                AND NOT EXISTS (
-                  SELECT 1 FROM loan_events e
-                   WHERE e.loan_id = l.id AND e.event_type = "due_soon_notice"
-                     AND e.created_at > DATE_SUB(NOW(), INTERVAL 1 DAY)
-                )
               ORDER BY l.due_at ASC',
             [$organizationId, $withinDays],
         );
@@ -1307,18 +1374,22 @@ final class Loans
         return array_map([self::class, 'decorate'], $rows);
     }
 
-    /** Overdue loans that have not been chased in the last day. */
+    /**
+     * Every overdue loan.
+     *
+     * Whether one was already chased today is the reminder job's question, and
+     * it answers it by calendar day. This used to exclude anything chased in
+     * the last 24 hours as well. Cron fires at the same minute each morning,
+     * and yesterday's notice was written a few seconds after that minute, so it
+     * was always just inside the window: daily reminders went out every second
+     * day, and this list and its count left those loans out in between.
+     */
     public static function overdue(int $organizationId): array
     {
         $rows = Db::all(
             self::SELECT . '
               WHERE l.organization_id = ? AND l.status = "active"
                 AND l.due_at IS NOT NULL AND l.due_at < NOW()
-                AND NOT EXISTS (
-                  SELECT 1 FROM loan_events e
-                   WHERE e.loan_id = l.id AND e.event_type = "overdue_notice"
-                     AND e.created_at > DATE_SUB(NOW(), INTERVAL 1 DAY)
-                )
               ORDER BY l.due_at ASC',
             [$organizationId],
         );

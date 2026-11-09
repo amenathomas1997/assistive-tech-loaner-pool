@@ -13,6 +13,15 @@ declare(strict_types=1);
 
 namespace Loaner;
 
+// A web page must never carry a warning or a stack trace, which name file
+// paths. Some shared hosts ship with display_errors on, and this code has no
+// say in that until it starts running, so it is switched off first thing.
+// Errors still go to the server log.
+if (PHP_SAPI !== 'cli') {
+    ini_set('display_errors', '0');
+    ini_set('log_errors', '1');
+}
+
 const APP_VERSION = '2.0.0';
 
 /**

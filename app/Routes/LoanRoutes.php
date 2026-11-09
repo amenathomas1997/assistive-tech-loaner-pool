@@ -215,6 +215,10 @@ final class LoanRoutes
         $identifier = $body['device'] ?? $body['barcode'] ?? null;
         $loanId     = $body['loan_id'] ?? $body['loanId'] ?? null;
 
+        if (is_array($identifier)) {
+            throw Util::badRequest('Send one device at a time here.', ['field' => 'device']);
+        }
+
         if (empty($identifier) && empty($loanId)) {
             throw Util::badRequest(
                 'Scan the device, or choose the loan to check in. If no scanner is to hand, find the '
@@ -308,7 +312,9 @@ final class LoanRoutes
         $body = $request->body();
 
         $days     = $body['days'] ?? null;
-        $newDueAt = $body['new_due_at'] ?? $body['newDueAt'] ?? null;
+        // Blank means no date. It reached new DateTimeImmutable('') as it was,
+        // which is "now", so an empty value quietly made the loan due today.
+        $newDueAt = Util::str($body['new_due_at'] ?? $body['newDueAt'] ?? null);
 
         if ($days !== null) {
             $days = Util::int($days, 'days', 1, 3650) * $sign;
@@ -318,7 +324,7 @@ final class LoanRoutes
         // endpoint says. Without this, "reduce" with a later date quietly
         // extends the loan and writes an "extended" entry to the timeline —
         // the audit trail would then disagree with the request that caused it.
-        if ($newDueAt !== null && $newDueAt !== '') {
+        if ($newDueAt !== null) {
             $target = Util::dateTime($newDueAt, 'new_due_at');
             $loan   = Loans::getVisible($auth, (int) $auth['organizationId'], (int) $request->param('id'));
             $due    = empty($loan['due_at']) ? null : strtotime((string) $loan['due_at']);
