@@ -61,6 +61,9 @@ ROUTE_LOG="${LP_ROUTE_LOG:-/tmp/loaner-route-coverage.log}"
 rm -f "$ROUTE_LOG"
 export LOANER_ROUTE_LOG="$ROUTE_LOG"
 
+# Microsoft sign-in talks to a stand-in that scripts/e2e-sso.sh starts.
+export LOANER_SSO_AUTHORITY="http://127.0.0.1:${LP_FAKE_ENTRA_PORT:-3909}"
+
 echo "==> Starting server on port $PORT"
 # PHP's built-in server with the dev router, which mirrors what .htaccess does
 # under Apache. Single-threaded by default, so the worker count is raised:
@@ -169,6 +172,10 @@ echo "==> Running boundary suite"
 ./scripts/e2e-boundaries.sh "http://localhost:$PORT"
 BOUNDARY_RESULT=$?
 
+echo "==> Running Microsoft sign-in suite"
+./scripts/e2e-sso.sh "http://localhost:$PORT"
+SSO_RESULT=$?
+
 echo "==> Checking the API/UI contract"
 ./scripts/verify-ui-contract.sh "http://localhost:$PORT"
 CONTRACT_RESULT=$?
@@ -212,6 +219,7 @@ if [ "$RESULT" -eq 0 ]; then RESULT=$WAVE3_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$COVERAGE_SUITE_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$CUSTODY_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$BOUNDARY_RESULT; fi
+if [ "$RESULT" -eq 0 ]; then RESULT=$SSO_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$INSTALL_CHECKS; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRACT_RESULT; fi
 if [ "$RESULT" -eq 0 ]; then RESULT=$CONTRAST_RESULT; fi

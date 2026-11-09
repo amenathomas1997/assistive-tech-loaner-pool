@@ -370,6 +370,10 @@ contract "hygiene/queue -> workshop" "$(api GET /api/v1/hygiene/queue)" rows tot
 contract "sites -> workshop" "$(api GET /api/v1/sites)" data meta
 contract "transfers -> workshop" "$(api GET /api/v1/transfers)" data meta
 
+contract "auth/sso/status -> app.js" "$(api GET /api/v1/auth/sso/status)" enabled required
+contract "admin/settings -> admin.js sign-in card" "$(api GET /api/v1/admin/settings)" \
+  sso_status.usable sso_status.reason sso_status.redirect_uri sso_status.https
+
 # The three detail screens. Every one of these failed to load at all: the device
 # screen read loan_history, which the route never returned; the loan screen read
 # .data from a response keyed by phase; the repair screen read .timeline where

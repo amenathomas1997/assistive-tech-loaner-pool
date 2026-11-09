@@ -436,7 +436,7 @@ final class Directory
     private const USER_SELECT = '
         SELECT u.id, u.organization_id, u.email, u.full_name, u.role, u.phone, u.employee_ref,
                u.badge_barcode, u.active, u.must_change_password, u.locked_until, u.last_login_at,
-               u.created_at, u.updated_at,
+               u.created_at, u.updated_at, (u.entra_oid IS NOT NULL) AS sso_linked,
                (SELECT COUNT(*) FROM loans l WHERE l.tech_id = u.id AND l.status = "active")
                    AS active_loan_count,
                (SELECT COUNT(*) FROM loan_requests r WHERE r.requested_by = u.id
@@ -621,6 +621,12 @@ final class Directory
 
             $sets[]   = 'active = ?';
             $params[] = $active ? 1 : 0;
+        }
+
+        // For when somebody's Microsoft account is replaced. Without it the new
+        // one would be refused forever as a different person.
+        if (array_key_exists('unlink_sso', $data) && Util::bool($data['unlink_sso'])) {
+            $sets[] = 'entra_oid = NULL';
         }
 
         if (array_key_exists('unlock', $data) && Util::bool($data['unlock'])) {

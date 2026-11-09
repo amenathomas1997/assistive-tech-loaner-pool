@@ -413,6 +413,7 @@ async function openUserDialog(user, onDone) {
     autocomplete: 'new-password',
   });
 
+  const unlinkBox = el('input', { type: 'checkbox', id: 'user-unlink-sso' });
   const activeBox = el('input', { type: 'checkbox', id: 'user-active', checked: user ? Boolean(user.active) : true });
 
   return modal({
@@ -423,6 +424,13 @@ async function openUserDialog(user, onDone) {
       fields.role,
       el('div', { class: 'form-grid' }, [fields.phone, fields.employee_ref]),
       passwordField,
+      user?.sso_linked ? el('label', { class: 'checkbox', for: 'user-unlink-sso' }, [
+        unlinkBox,
+        el('span', {}, [
+          'Unlink from Microsoft',
+          el('span', { class: 'option-help' }, 'Use this if their Microsoft account was replaced. The next one they sign in with is linked instead.'),
+        ]),
+      ]) : null,
       user ? el('label', { class: 'checkbox', for: 'user-active' }, [
         activeBox,
         el('span', {}, [
@@ -447,6 +455,7 @@ async function openUserDialog(user, onDone) {
           }
           if (passwordField) body.password = passwordField.control.value;
           if (user) body.active = activeBox.checked;
+          if (user?.sso_linked && unlinkBox.checked) body.unlink_sso = true;
 
           try {
             if (user) await api.updateUser(user.id, body);

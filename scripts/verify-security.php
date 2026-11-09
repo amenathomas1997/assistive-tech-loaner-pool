@@ -130,6 +130,35 @@ foreach ($cases as [$origin, $host, $expected, $why]) {
     $check($why, $got === $expected, 'sameHost returned ' . var_export($got, true));
 }
 
+// --- Microsoft ID token claims ---------------------------------------------
+
+$authority = 'https://login.microsoftonline.com';
+$tenant    = '11111111-2222-3333-4444-555555555555';
+$client    = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+$now       = 1_800_000_000;
+$good      = [
+    'iss' => "{$authority}/{$tenant}/v2.0", 'tid' => $tenant, 'aud' => $client, 'nonce' => 'n',
+    'exp' => $now + 3600, 'nbf' => $now - 10, 'oid' => '99999999-8888-7777-6666-555555555555',
+];
+
+$cases = [
+    [[],                                                     null,            'a good token'],
+    [['exp' => $now - 299],                                  null,            'expired, inside the five-minute clock allowance'],
+    [['exp' => $now - 301],                                  'expired',       'expired, past the allowance'],
+    [['nbf' => $now + 299],                                  null,            'not valid yet, inside the allowance'],
+    [['nbf' => $now + 301],                                  'not_yet_valid', 'not valid yet, past the allowance'],
+    [['aud' => [$client]],                                   'audience',      'an audience that is a list'],
+    [['iss' => "{$authority}/common/v2.0"],                  'issuer',        'the multi-tenant issuer'],
+    [['oid' => 'not-a-guid'],                                'no_object_id',  'an object id that is not one'],
+    [['idp' => "https://sts.windows.net/{$tenant}/"],        null,            'an idp claim naming this tenant'],
+    [['idp' => 'live.com'],                                  'guest',         'a personal Microsoft account as a guest'],
+];
+
+foreach ($cases as [$change, $expected, $why]) {
+    $got = Sso::claimProblem(array_replace($good, $change), $authority, $tenant, $client, 'n', $now);
+    $check($why, $got === $expected, 'claimProblem returned ' . var_export($got, true));
+}
+
 echo "\n";
 
 if ($failures === 0) {

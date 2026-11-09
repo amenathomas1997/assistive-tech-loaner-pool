@@ -1503,6 +1503,8 @@ dialog.modal.modal-wide { max-width: min(960px, calc(100vw - 32px)); }
 
 /* The appearance link under the sign-in form. */
 .signin-appearance { text-align: center; margin: 14px 0 0; }
+.sso-button { margin-bottom: 14px; }
+.sso-divider { text-align: center; margin: 0 0 14px; }
 .preset-label { font-weight: 620; font-size: 0.92rem; }
 
 /* The measured ratio, stated in words as well as a number. Bordered rather

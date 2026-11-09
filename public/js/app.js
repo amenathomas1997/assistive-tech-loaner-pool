@@ -50,6 +50,21 @@ let pendingCounts = { requests: 0, overdue: 0, repairs: 0, ready: 0 };
 // Routes
 // ---------------------------------------------------------------------------
 
+/** What /auth/sso/status said at start-up. Null until then, or if it failed. */
+let ssoStatus = null;
+let ssoNotice = null;
+
+const SSO_ERRORS = {
+  no_account: 'There is no Loaner Pool account for that Microsoft account. Ask an administrator to add one, using the same address you sign in to Microsoft with.',
+  inactive: 'That account has been deactivated. Contact an administrator.',
+  mismatch: 'That address is linked to a different Microsoft account. An administrator can unlink it on the Staff screen.',
+  guest: 'Guest accounts from other organisations cannot sign in here. Use an account from this organisation.',
+  cancelled: 'Signing in was cancelled.',
+  expired: 'That sign-in took too long, or was started in another window. Try again.',
+  not_configured: 'Microsoft sign-in is not set up. Use your email and password, or contact an administrator.',
+  failed: 'Microsoft sign-in could not be completed. Try again. If it keeps happening, an administrator can find the reason in the audit log.',
+};
+
 const ROUTES = [
   { path: 'dashboard',        title: 'Dashboard',        render: renderDashboard,     capability: null },
   { path: 'scan',             title: 'Scan station',     render: renderScanStation,   capability: 'scan.use' },
@@ -805,6 +820,8 @@ function renderSecondFactor(login, email) {
 
 function renderSignIn({ message = null } = {}) {
   document.title = 'Sign in — Loaner Pool';
+  const notice = ssoNotice;
+  ssoNotice = null;
   const emailField = field({
     name: 'email', label: 'Email address', type: 'email', required: true,
     // SC 1.3.5 / 3.3.8 — lets a password manager identify and fill the form.
@@ -879,7 +896,17 @@ function renderSignIn({ message = null } = {}) {
       ]),
       el('div', { class: 'card' }, [
         message ? alertBox(message, { type: 'info' }) : null,
+        notice ? alertBox(notice, { type: 'danger', title: 'Microsoft sign-in did not work' }) : null,
         errorRegion,
+        ssoStatus?.enabled
+          ? el('a', { class: 'btn btn-primary btn-block sso-button', href: '/api/v1/auth/sso/start' }, 'Sign in with Microsoft')
+          : null,
+        ssoStatus?.enabled
+          ? el('p', {
+              class: 'muted sso-divider',
+              text: ssoStatus.required ? 'Administrators can also use a password:' : 'Or use your email and password:',
+            })
+          : null,
         form,
       ]),
 
@@ -1130,6 +1157,34 @@ function start() {
  */
 let reauthOpen = false;
 
+/**
+ * Sign in with Microsoft in its own window, so the page behind is untouched.
+ * Resolves true once somebody has signed in, false if it did not work out.
+ */
+let ssoChannel = null;
+
+function signInWithMicrosoftPopup() {
+  return new Promise((resolve) => {
+    // A second press replaces the first. Otherwise both would finish.
+    ssoChannel?.close();
+
+    const popup = window.open('/api/v1/auth/sso/start?popup=1', 'loaner-sso', 'width=520,height=680');
+
+    if (!popup) {
+      resolve({ ok: false, message: 'Your browser blocked the sign-in window. Allow pop-ups for this site and try again.' });
+      return;
+    }
+
+    ssoChannel = new BroadcastChannel('loaner-sso');
+    ssoChannel.onmessage = ({ data }) => {
+      ssoChannel.close();
+      resolve(data?.error
+        ? { ok: false, message: SSO_ERRORS[data.error] || SSO_ERRORS.failed }
+        : { ok: true });
+    };
+  });
+}
+
 async function promptReauthentication() {
   // Every request in flight gets a 401 when a session goes, so this fires
   // several times over. One dialog.
@@ -1149,6 +1204,32 @@ async function promptReauthentication() {
     autocomplete: 'current-password',
   });
   const errorRegion = el('div', { role: 'alert' });
+
+  const microsoftAction = ssoStatus?.enabled ? [{
+    label: 'Sign in with Microsoft (opens a new window)',
+    class: ssoStatus.required ? 'btn-primary' : '',
+    onClick: async (close) => {
+      const outcome = await signInWithMicrosoftPopup();
+
+      if (!outcome.ok) {
+        clear(errorRegion).append(alertBox(outcome.message, { type: 'danger', title: 'Sign-in failed' }));
+        announce(`Sign-in failed. ${outcome.message}`, { assertive: true });
+        return;
+      }
+
+      // Whoever signed in has to be whoever's work is on this screen.
+      const me = await api.me().catch(() => null);
+      if (me?.user?.email !== email) {
+        close(false);
+        return;
+      }
+
+      session.user = me.user;
+      session.organization = me.organization;
+      session.capabilities = me.capabilities;
+      close(true);
+    },
+  }] : [];
 
   const signedBackIn = await modal({
     title: 'Your session has expired',
@@ -1170,9 +1251,10 @@ async function promptReauthentication() {
         class: 'btn-ghost',
         onClick: (close) => close(false),
       },
+      ...microsoftAction,
       {
         label: 'Sign in',
-        class: 'btn-primary',
+        class: ssoStatus?.required ? '' : 'btn-primary',
         onClick: async (close, dialog) => {
           const password = passwordField.control.value;
 
@@ -1182,7 +1264,8 @@ async function promptReauthentication() {
             return;
           }
 
-          const button = dialog.querySelector('.modal-footer .btn-primary');
+          const button = [...dialog.querySelectorAll('.modal-footer .btn')]
+            .find((b) => b.textContent === 'Sign in');
 
           await withBusy(button, 'Signing in…', async () => {
             try {
@@ -1255,6 +1338,16 @@ async function boot() {
   // the device switching between light and dark — without which "follow this
   // device" would stop following it until the next reload.
   initTheme();
+
+  ssoStatus = await api.ssoStatus().catch(() => null);
+
+  // The reason a Microsoft sign-in came back without signing anybody in. Taken
+  // out of the address straight away, so a reload does not show it again.
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('sso_error')) {
+    ssoNotice = SSO_ERRORS[params.get('sso_error')] || SSO_ERRORS.failed;
+    window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+  }
 
   const resetToken = resetTokenFromHash();
   if (resetToken) {

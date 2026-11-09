@@ -106,11 +106,23 @@ final class Settings
 
         // --- Two-factor -------------------------------------------------------
         'security.require_2fa_for_admins' => ['boolean', false, 'security'],
+
+        // --- Sign in with Microsoft -------------------------------------------
+        // Creating accounts is off by default: being in the directory is not
+        // the same as being given access to client records.
+        'sso.enabled'       => ['boolean', false, 'sso'],
+        'sso.tenant_id'     => ['string',  '',    'sso'],
+        'sso.client_id'     => ['string',  '',    'sso'],
+        'sso.client_secret' => ['string',  '',    'sso', true],
+        'sso.required'      => ['boolean', false, 'sso'],
+        'sso.auto_create'   => ['boolean', false, 'sso'],
+        'sso.default_role'  => ['string',  'viewer', 'sso'],
+        'sso.session_hours' => ['integer', 24,    'sso'],
     ];
 
     public const GROUPS = [
         'email', 'notifications', 'loans', 'scanning', 'agreements', 'photos', 'reservations',
-        'outcomes', 'hygiene', 'sms', 'sites', 'retention', 'security',
+        'outcomes', 'hygiene', 'sms', 'sites', 'retention', 'security', 'sso',
     ];
 
     /** @var array<int, array<string, mixed>> */

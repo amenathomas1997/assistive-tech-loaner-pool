@@ -309,6 +309,8 @@ final class Jobs
             'DELETE FROM password_resets WHERE expires_at < DATE_SUB(NOW(), INTERVAL 7 DAY)',
         );
 
+        Sso::prune();
+
         return [
             'summary' => sprintf(
                 '%d expired session(s), %d half-finished sign-in(s) and %d old reset token(s) removed.',

@@ -424,6 +424,7 @@ final class AdminRoutes
             'settings'    => Settings::forClient($organizationId),
             'groups'      => Settings::GROUPS,
             'mail_status' => self::mailStatus($organizationId),
+            'sso_status'  => \Loaner\Sso::adminStatus($organizationId, $request),
             'definitions' => array_map(static fn (array $d): array => [
                 'type'    => $d[0],
                 'default' => $d[1],
@@ -495,6 +496,7 @@ final class AdminRoutes
         Response::json([
             'settings' => Settings::forClient($organizationId),
             'changed'  => $result['changed'],
+            'sso_status' => \Loaner\Sso::adminStatus($organizationId, $request),
             // Recomputed after the write, not before: the client re-renders
             // "is email working?" from this the moment a save returns, and
             // telling it the pre-save state would show the administrator the

@@ -13,6 +13,7 @@ use Loaner\Db;
 use Loaner\Request;
 use Loaner\Response;
 use Loaner\Router;
+use Loaner\Sso;
 use Loaner\Util;
 
 final class Authentication
@@ -33,6 +34,11 @@ final class Authentication
         $router->post('/auth/forgot-password', [self::class, 'forgotPassword']);
         $router->post('/auth/reset-password', [self::class, 'resetPassword']);
         $router->post('/auth/login/verify', [self::class, 'verifySecondFactor']);
+
+        // No capability: these are how somebody gets one.
+        $router->get('/auth/sso/status', [self::class, 'ssoStatus']);
+        $router->get('/auth/sso/start', [Sso::class, 'start']);
+        $router->get('/auth/sso/callback', [Sso::class, 'callback']);
     }
 
     public static function login(Request $request): never
@@ -82,6 +88,14 @@ final class Authentication
 
             // The password was right but a code is needed. Not an error: the
             // sign-in is half done, and the client is told how to finish it.
+            if ($result['reason'] === 'sso_required') {
+                Response::error(
+                    403,
+                    'sso_required',
+                    'This organisation signs in with Microsoft. Use the "Sign in with Microsoft" button.',
+                );
+            }
+
             if ($result['reason'] === 'totp_required') {
                 Response::json([
                     'second_factor_required' => true,
@@ -150,6 +164,11 @@ final class Authentication
      * The half-finished attempt lives server-side, so a browser cannot skip
      * from "password accepted" to "signed in" by editing what it holds.
      */
+    public static function ssoStatus(Request $request): never
+    {
+        Response::json(Sso::publicStatus());
+    }
+
     public static function verifySecondFactor(Request $request): never
     {
         $pendingId = Util::str($request->input('pending_id'), 128);
@@ -377,6 +396,13 @@ final class Authentication
         );
 
         if ($user === null || (int) $user['active'] !== 1) {
+            Response::json($generic);
+        }
+
+        // A reset would produce a password this account cannot use.
+        if (!\Loaner\Sso::passwordAllowed(Db::one(
+            'SELECT organization_id, role FROM users WHERE id = ?', [$user['id']],
+        ))) {
             Response::json($generic);
         }
 

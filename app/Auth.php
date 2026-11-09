@@ -169,11 +169,13 @@ final class Auth
     // Sessions
     // -----------------------------------------------------------------------
 
-    public static function createSession(int $userId, string $ip, ?string $userAgent): array
+    public static function createSession(int $userId, string $ip, ?string $userAgent, ?int $lifetimeHours = null): array
     {
         $id           = bin2hex(random_bytes(32));
         $lifetimeDays = (int) (Config::get()['session']['lifetimeDays'] ?? 14);
-        $expiresAt    = Util::addDays(new \DateTimeImmutable(), $lifetimeDays ?: 14);
+        $expiresAt    = $lifetimeHours !== null
+            ? new \DateTimeImmutable("+{$lifetimeHours} hours")
+            : Util::addDays(new \DateTimeImmutable(), $lifetimeDays ?: 14);
 
         Db::execute(
             'INSERT INTO sessions (id, user_id, ip, user_agent, expires_at) VALUES (?, ?, ?, ?, ?)',
@@ -257,7 +259,7 @@ final class Auth
      * on installation day says — and a cookie marked Secure costs nothing on a
      * site that is HTTPS anyway.
      */
-    private static function cookieMustBeSecure(): bool
+    public static function cookieMustBeSecure(): bool
     {
         return (bool) (Config::get()['session']['secureCookies'] ?? false) || Request::detectSecure();
     }
@@ -320,6 +322,12 @@ final class Auth
             'UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?',
             [$user['id']],
         );
+
+        // After the password check, so only somebody who knows the password
+        // learns that this account has to use Microsoft instead.
+        if (!Sso::passwordAllowed($user)) {
+            return ['ok' => false, 'reason' => 'sso_required', 'user' => $user];
+        }
 
         // The password was right, but it is not a sign-in yet if a second
         // factor is expected. last_login_at is deliberately not touched here:

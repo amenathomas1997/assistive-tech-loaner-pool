@@ -237,6 +237,52 @@ told?" always has an answer.
 
 ---
 
+## Sign in with Microsoft (Entra ID)
+
+Staff can sign in with their Microsoft work account. Passwords keep working
+until you decide otherwise.
+
+**In the Microsoft Entra admin center**, under App registrations:
+
+1. Choose **New registration**. Give it a name, and for supported account types
+   choose **this organizational directory only**.
+2. Under **Redirect URI**, choose **Web** and paste the address shown at
+   Settings → Sign in with Microsoft. It ends in `/api/v1/auth/sso/callback`,
+   and Microsoft requires it to be `https://`.
+3. From the **Overview** page, copy the Application (client) ID and the
+   Directory (tenant) ID.
+4. Under **Certificates & secrets**, create a client secret and copy its
+   **Value**. Microsoft shows it only once.
+
+No API permissions need adding. The default `User.Read` is enough, and the mail
+registration can be reused if you would rather not have two, by adding the
+redirect address to it.
+
+**In Loaner Pool**, under Settings → Sign in with Microsoft, enter the three
+values and tick **Offer "Sign in with Microsoft"**.
+
+**How people are matched.** The first time someone signs in, their Microsoft
+username (usually their work email) has to equal the email on a staff account.
+After that the account is tied to their Microsoft identity and the address no
+longer matters. If someone's username differs from their email, change the
+email on their staff account to match, or switch on creating accounts at first
+sign-in.
+
+**Before you require it**, sign in with Microsoft yourself and check that it
+works. Administrators can always use a password, so nobody is locked out if
+Microsoft is unavailable or the secret expires. Set a reminder for the secret's
+expiry date: when it lapses, Microsoft sign-in stops, and the reason appears in
+the audit log.
+
+**When someone leaves**, disabling them in Microsoft stops new sign-ins, but
+does not end a session already open here. That is what the session length under
+the same settings is for. For an immediate stop, also deactivate them on the
+Staff screen.
+
+Multi-factor authentication for these sign-ins is set in Microsoft, with
+Conditional Access. This application does not ask for its own second factor on
+top.
+
 ## Due-soon and overdue reminders
 
 These are the only emails sent on a schedule rather than in response to

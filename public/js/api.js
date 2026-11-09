@@ -108,6 +108,7 @@ export const api = {
   // --- Auth ---------------------------------------------------------------
   login: (email, password) => request('POST', '/auth/login', { body: { email, password } }),
   logout: () => request('POST', '/auth/logout'),
+  ssoStatus: () => request('GET', '/auth/sso/status'),
   me: () => request('GET', '/auth/me'),
   changePassword: (body) => request('POST', '/auth/change-password', { body }),
   verifySecondFactor: (pendingId, code) =>

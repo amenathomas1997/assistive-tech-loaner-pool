@@ -86,6 +86,11 @@ So you can audit it rather than take it on trust:
 
 So a report does not duplicate something already in place:
 
+- **Microsoft sign-in** is the authorization code flow with PKCE, limited to one
+  tenant by ID. Accounts are identified by the token's `oid`, never its email.
+  State is single-use and bound to the browser. A guest from another directory
+  is refused, and an account created at first sign-in can never be an
+  administrator.
 - **Sessions** are random 256-bit ids stored server-side; the cookie is
   `HttpOnly`, `SameSite=Lax`, and `Secure` whenever the request arrived over
   TLS, whatever the configuration file says. Changing or resetting a password

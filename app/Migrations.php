@@ -19,7 +19,7 @@ namespace Loaner;
 final class Migrations
 {
     /** Highest version this build knows about. */
-    public const TARGET_VERSION = 6;
+    public const TARGET_VERSION = 7;
 
     // -----------------------------------------------------------------------
     // Idempotent DDL helpers
@@ -592,6 +592,29 @@ final class Migrations
                     // code works once (RFC 6238 §5.2).
                     self::addColumn('users', 'totp_last_counter',
                         'BIGINT UNSIGNED DEFAULT NULL', $log);
+                },
+            ],
+            [
+                'version' => 7,
+                'name'    => 'Sign in with Microsoft',
+                'up'      => static function (array &$log): void {
+                    self::addColumn('users', 'entra_oid', 'VARCHAR(64) DEFAULT NULL', $log);
+                    self::addIndex('users', 'uq_users_entra_oid',
+                        'UNIQUE KEY uq_users_entra_oid (organization_id, entra_oid)', $log);
+
+                    // One row per sign-in in progress. Hashes, so a read of
+                    // this table cannot be used to finish somebody's sign-in.
+                    self::createTable('sso_states', '
+                        state_hash      CHAR(64)     NOT NULL,
+                        browser_hash    CHAR(64)     NOT NULL,
+                        organization_id INT UNSIGNED NOT NULL,
+                        nonce           CHAR(64)     NOT NULL,
+                        code_verifier   VARCHAR(128) NOT NULL,
+                        popup           TINYINT(1)   NOT NULL DEFAULT 0,
+                        expires_at      DATETIME     NOT NULL,
+                        PRIMARY KEY (state_hash),
+                        KEY idx_sso_expires (expires_at)
+                    ', $log);
                 },
             ],
         ];

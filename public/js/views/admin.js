@@ -372,6 +372,8 @@ export async function renderSettings() {
       graphForm,
     ]),
 
+    ssoCard(settings, settingsResponse.sso_status, readOnly),
+
     el('section', { class: 'card', 'aria-labelledby': 'notify-heading' }, [
       el('h2', { id: 'notify-heading', text: 'What triggers an email' }), notifyForm,
     ]),
@@ -1465,6 +1467,117 @@ function schedulerSection() {
 // ===========================================================================
 // Loan periods
 // ===========================================================================
+
+/** Sign in with Microsoft Entra ID. */
+function ssoCard(settings, initialStatus, readOnly) {
+  const fields = {
+    'sso.tenant_id': field({
+      name: 'sso.tenant_id', label: 'Directory (tenant) ID', value: settings['sso.tenant_id'] || '',
+      disabled: readOnly, autocomplete: 'off',
+      help: 'From the app registration Overview page. It has to be the ID, not a name such as "common".',
+    }),
+    'sso.client_id': field({
+      name: 'sso.client_id', label: 'Application (client) ID', value: settings['sso.client_id'] || '',
+      disabled: readOnly, autocomplete: 'off',
+    }),
+    'sso.client_secret': field({
+      name: 'sso.client_secret', label: 'Client secret', type: 'password',
+      disabled: readOnly, autocomplete: 'off',
+      placeholder: settings['sso.client_secret__is_set'] ? 'Stored — leave blank to keep it' : '',
+      help: settings['sso.client_secret__is_set']
+        ? `A secret is stored (${settings['sso.client_secret__hint']}). Leave this blank to keep it.`
+        : 'The secret VALUE from Azure, not the secret ID.',
+    }),
+    'sso.session_hours': field({
+      name: 'sso.session_hours', label: 'Sign people out after this many hours', type: 'number',
+      value: settings['sso.session_hours'] ?? 24, min: 1, max: 336, disabled: readOnly,
+      help: 'Turning someone off in Microsoft does not end a session here, so this is how long a person who has left could still get in.',
+    }),
+    'sso.default_role': field({
+      name: 'sso.default_role', label: 'Role for accounts created at first sign-in', type: 'select',
+      value: settings['sso.default_role'] || 'viewer', disabled: readOnly,
+      options: [
+        { value: 'viewer', label: 'Read-only' },
+        { value: 'vrc', label: 'Vocational Rehabilitation Counselor' },
+        { value: 'tech', label: 'Technician' },
+      ],
+    }),
+  };
+
+  const box = (id, key, label, help) => {
+    const input = el('input', { type: 'checkbox', id, checked: Boolean(settings[key]), disabled: readOnly });
+    return {
+      key,
+      input,
+      node: el('label', { class: 'checkbox', for: id }, [
+        input, el('span', {}, [label, el('span', { class: 'option-help' }, help)]),
+      ]),
+    };
+  };
+
+  const boxes = [
+    box('sso-enabled', 'sso.enabled', 'Offer "Sign in with Microsoft"', 'Adds the button to the sign-in page.'),
+    box('sso-required', 'sso.required', 'Require it for everyone except administrators',
+      'Staff can no longer use a password. Administrators can, so someone can still get in if Microsoft is unavailable.'),
+    box('sso-auto-create', 'sso.auto_create', 'Create an account the first time someone signs in',
+      'Off means an administrator adds each person first. Being in your directory does not by itself give access to client records.'),
+  ];
+
+  const statusBox = el('div');
+  const renderStatus = (status) => {
+    clear(statusBox);
+    if (!status) return;
+    statusBox.append(status.usable
+      ? alertBox('Microsoft sign-in is set up and switched on.', { type: 'ok', title: 'Ready' })
+      : alertBox(status.reason, { type: 'warn', title: 'Not in use' }));
+    if (!status.https) {
+      statusBox.append(alertBox('Microsoft only accepts an https:// redirect address, except on localhost.',
+        { type: 'warn', title: 'This site is not on HTTPS' }));
+    }
+  };
+  renderStatus(initialStatus);
+
+  const button = el('button', { type: 'submit', class: 'btn btn-primary', disabled: readOnly }, 'Save sign-in settings');
+
+  const form = el('form', {
+    novalidate: true,
+    onSubmit: async (event) => {
+      event.preventDefault();
+      await withBusy(button, 'Saving…', async () => {
+        const updates = {};
+        for (const b of boxes) updates[b.key] = b.input.checked;
+        for (const [key, f] of Object.entries(fields)) {
+          const value = f.control.value.trim?.() ?? f.control.value;
+          if (key === 'sso.client_secret' && value === '') continue;
+          updates[key] = key === 'sso.session_hours' ? Number(value || 24) : value;
+        }
+
+        try {
+          const result = await api.updateSettings(updates);
+          toastOk('Sign-in settings saved.');
+          renderStatus(result.sso_status);
+          fields['sso.client_secret'].control.value = '';
+        } catch (err) {
+          toastError(err.message);
+        }
+      });
+    },
+  }, [
+    ...boxes.map((b) => b.node),
+    el('div', { class: 'form-grid' }, [fields['sso.tenant_id'], fields['sso.client_id']]),
+    fields['sso.client_secret'],
+    el('div', { class: 'form-grid' }, [fields['sso.session_hours'], fields['sso.default_role']]),
+    button,
+  ]);
+
+  return el('section', { class: 'card', 'aria-labelledby': 'sso-heading' }, [
+    el('h2', { id: 'sso-heading', text: 'Sign in with Microsoft' }),
+    el('p', { class: 'muted', text: 'Staff sign in with their Microsoft work account (Entra ID). In the app registration, add this as a Web redirect address:' }),
+    el('p', { class: 'key-reveal', text: initialStatus?.redirect_uri || '' }),
+    statusBox,
+    form,
+  ]);
+}
 
 export async function renderLoanPeriods() {
   const container = el('div');

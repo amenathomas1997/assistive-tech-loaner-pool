@@ -46,6 +46,7 @@ final class Backup
         'password_resets' => 'reset tokens, valid for an hour',
         'scan_channels'   => 'phone pairing codes, valid for a few hours',
         'scan_events'     => 'barcodes a phone sent to a desk, kept for twelve hours',
+        'sso_states'      => 'Microsoft sign-ins in progress, valid for ten minutes',
     ];
 
     /**
