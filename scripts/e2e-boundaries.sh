@@ -260,6 +260,46 @@ GIF='data:image/png;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
 STORED=$(api "$ADMIN" POST "/attachments/loan/$L2" "{\"phase\":\"out\",\"images\":[\"$GIF\"]}" | jqv count)
 eq 'a file must be the kind of image it claims to be'       "$STORED" 0
 
+# --- Found by the third audit -------------------------------------------------
+
+# A blank retention box is saved as zero, and zero has to mean "keep".
+KEEP='{"settings":{"retention.enabled":true,"retention.client_years":0,"retention.audit_years":0,"retention.email_log_days":0}}'
+api "$ADMIN" PATCH /admin/settings "$KEEP" > /dev/null
+eq 'a blank audit limit previews nothing to delete'         "$(api "$ADMIN" GET /admin/retention | jqv audit_entries)" 0
+PURGE_BODY="{\"password\":\"$PASSWORD\"}"
+PURGED=$(api "$ADMIN" POST /admin/retention/purge "$PURGE_BODY")
+eq 'a blank audit limit deletes no audit entries'           "$(printf '%s' "$PURGED" | jqv audit_deleted)" 0
+eq 'a blank email limit deletes no email records'           "$(printf '%s' "$PURGED" | jqv email_deleted)" 0
+OFF='{"settings":{"retention.enabled":false,"retention.client_years":7,"retention.audit_years":7,"retention.email_log_days":365}}'
+api "$ADMIN" PATCH /admin/settings "$OFF" > /dev/null
+
+# A request for one device cannot be fulfilled with another.
+PROMISED=$(device); OTHER=$(device)
+Q=$(api "$ADMIN" POST /requests '{"requested_details":"x","justification":"y"}' | jqv request.id)
+APPROVE="{\"device_id\":$PROMISED}"
+api "$ADMIN" POST "/requests/$Q/approve" "$APPROVE" > /dev/null
+WRONG="{\"device\":$OTHER,\"client_id\":$MY_CLIENT,\"custom_days\":3,\"request_id\":$Q}"
+eq 'a request cannot be spent on a different device'        "$(code "$ADMIN" POST /loans/checkout "$WRONG")" 409
+eq 'and the promised device stays held'                     "$(status_of "$PROMISED")" reserved
+
+# A new client is held to the same checks as an edit.
+BAD_COUNSELOR='{"first_name":"A","last_name":"B","counselor_id":99999999}'
+BAD_SHAPE='{"first_name":"A","last_name":"B","program_id":[1]}'
+eq 'a new client cannot name a counselor who does not exist' "$(code "$ADMIN" POST /clients "$BAD_COUNSELOR")" 400
+eq 'a new client cannot send a list as its program'         "$(code "$ADMIN" POST /clients "$BAD_SHAPE")" 400
+
+# Only somebody with the password learns an account was deactivated.
+GONE_MAIL="gone-$(date +%s)-$$@example.org"
+GONE=$(staff 'Gone Person' "$GONE_MAIL" tech)
+GONE_OFF='{"active":false}'
+api "$ADMIN" PATCH "/users/$GONE" "$GONE_OFF" > /dev/null
+NOJAR=$(mktemp)
+WRONG_PW="{\"email\":\"$GONE_MAIL\",\"password\":\"not-the-password-99\"}"
+RIGHT_PW="{\"email\":\"$GONE_MAIL\",\"password\":\"$PASSWORD\"}"
+eq 'a wrong password does not reveal a deactivated account' "$(code "$NOJAR" POST /auth/login "$WRONG_PW")" 401
+eq 'the right password is told the account is deactivated'  "$(code "$NOJAR" POST /auth/login "$RIGHT_PW")" 403
+rm -f "$NOJAR"
+
 rm -f "$ADMIN" "$VRC" "$TECH"
 
 echo

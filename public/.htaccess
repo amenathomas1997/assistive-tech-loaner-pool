@@ -33,6 +33,15 @@
     Header set Cache-Control "no-cache"
   </FilesMatch>
 
+  # The installer, the phone scanner and the Microsoft sign-in page are real
+  # files, so Apache serves them without PHP and they never receive the
+  # headers public/index.php sends. Same policy here. Keep the two in step.
+  <FilesMatch "\.html$">
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "same-origin"
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  </FilesMatch>
+
   # Third-party assets change only when the app is upgraded.
   <FilesMatch "^jsQR\.js$">
     Header set Cache-Control "public, max-age=86400"

@@ -541,13 +541,16 @@ function retentionSection(settings, readOnly) {
         help: 'Off by default. Nothing is ever removed until you switch this on and run it.',
       },
       {
-        key: 'retention.client_years', type: 'integer', min: 1,
+        key: 'retention.client_years', type: 'integer', min: 0,
         label: 'Anonymise clients after this many years without activity',
+        help: 'Leave blank or 0 to keep them.',
       },
-      { key: 'retention.audit_years', type: 'integer', min: 1,
-        label: 'Delete audit entries after this many years' },
-      { key: 'retention.email_log_days', type: 'integer', min: 1,
-        label: 'Delete email and text records after this many days' },
+      { key: 'retention.audit_years', type: 'integer', min: 0,
+        label: 'Delete audit entries after this many years',
+        help: 'Leave blank or 0 to keep them.' },
+      { key: 'retention.email_log_days', type: 'integer', min: 0,
+        label: 'Delete email and text records after this many days',
+        help: 'Leave blank or 0 to keep them.' },
     ],
   });
 }

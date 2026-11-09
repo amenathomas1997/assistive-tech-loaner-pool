@@ -292,8 +292,15 @@ final class Auth
             return ['ok' => false, 'reason' => 'no_such_user'];
         }
 
+        // Only somebody with the right password learns the account was
+        // deactivated. Otherwise any address could be tried, and the different
+        // answer would say that this person used to work here.
         if ((int) $user['active'] !== 1) {
-            return ['ok' => false, 'reason' => 'inactive', 'user' => $user];
+            return [
+                'ok'     => false,
+                'reason' => self::verifyPassword($password, $user['password_hash']) ? 'inactive' : 'bad_password',
+                'user'   => $user,
+            ];
         }
 
         if ($user['locked_until'] !== null && strtotime((string) $user['locked_until']) > time()) {

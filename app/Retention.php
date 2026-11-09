@@ -36,10 +36,14 @@ final class Retention
                 'Clients with no activity for ' . (int) $settings['retention.client_years']
                 . ' years are anonymised: name, contact details and notes are removed. Their loans '
                 . 'stay, so reporting is unaffected.',
-                'Audit entries older than ' . (int) $settings['retention.audit_years']
-                . ' years are deleted.',
-                'Email and text records older than ' . (int) $settings['retention.email_log_days']
-                . ' days are deleted.',
+                (int) $settings['retention.audit_years'] < 1
+                    ? 'Audit entries are kept, because no limit is set.'
+                    : 'Audit entries older than ' . (int) $settings['retention.audit_years']
+                      . ' years are deleted.',
+                (int) $settings['retention.email_log_days'] < 1
+                    ? 'Email and text records are kept, because no limit is set.'
+                    : 'Email and text records older than ' . (int) $settings['retention.email_log_days']
+                      . ' days are deleted.',
             ],
             'never_touched' => [
                 'A client with an open loan, an open request or a live waitlist entry is never '
@@ -62,23 +66,11 @@ final class Retention
 
         $clients = self::clientsDue($organizationId, (int) $settings['retention.client_years']);
 
-        $auditCount = (int) Db::value(
-            'SELECT COUNT(*) FROM audit_log
-              WHERE organization_id = ? AND created_at < DATE_SUB(NOW(), INTERVAL ? YEAR)',
-            [$organizationId, (int) $settings['retention.audit_years']],
-        );
+        $auditCount = self::older('SELECT COUNT(*)', 'audit_log', $organizationId, (int) $settings['retention.audit_years'], 'YEAR');
 
-        $emailCount = (int) Db::value(
-            'SELECT COUNT(*) FROM email_log
-              WHERE organization_id = ? AND created_at < DATE_SUB(NOW(), INTERVAL ? DAY)',
-            [$organizationId, (int) $settings['retention.email_log_days']],
-        );
+        $emailCount = self::older('SELECT COUNT(*)', 'email_log', $organizationId, (int) $settings['retention.email_log_days'], 'DAY');
 
-        $smsCount = (int) Db::value(
-            'SELECT COUNT(*) FROM sms_log
-              WHERE organization_id = ? AND created_at < DATE_SUB(NOW(), INTERVAL ? DAY)',
-            [$organizationId, (int) $settings['retention.email_log_days']],
-        );
+        $smsCount = self::older('SELECT COUNT(*)', 'sms_log', $organizationId, (int) $settings['retention.email_log_days'], 'DAY');
 
         return [
             'policy'  => self::policy($organizationId),
@@ -154,6 +146,33 @@ final class Retention
     }
 
     /**
+     * Count or delete the rows of a log that are past their limit.
+     *
+     * A limit below one means "keep them", as it always has for clients. It
+     * used to mean the opposite here: INTERVAL 0 YEAR is "older than right
+     * now", which is every row, and the settings form saves a cleared box as
+     * zero. So emptying the audit box and saving had the next scheduled run
+     * delete the entire audit log.
+     *
+     * @param string $verb  'SELECT COUNT(*)' or 'DELETE'; a constant from this class
+     * @param string $table a constant from this class
+     * @param string $unit  'YEAR' or 'DAY'; a constant from this class
+     */
+    private static function older(string $verb, string $table, int $organizationId, int $limit, string $unit): int
+    {
+        if ($limit < 1) {
+            return 0;
+        }
+
+        $sql = "{$verb} FROM {$table}
+                 WHERE organization_id = ? AND created_at < DATE_SUB(NOW(), INTERVAL ? {$unit})";
+
+        return $verb === 'DELETE'
+            ? Db::execute($sql, [$organizationId, $limit])
+            : (int) Db::value($sql, [$organizationId, $limit]);
+    }
+
+    /**
      * Apply the policy.
      *
      * Called by the scheduled job, and by an administrator pressing the button.
@@ -188,23 +207,11 @@ final class Retention
             $anonymised++;
         }
 
-        $auditDeleted = Db::execute(
-            'DELETE FROM audit_log
-              WHERE organization_id = ? AND created_at < DATE_SUB(NOW(), INTERVAL ? YEAR)',
-            [$organizationId, (int) $settings['retention.audit_years']],
-        );
+        $auditDeleted = self::older('DELETE', 'audit_log', $organizationId, (int) $settings['retention.audit_years'], 'YEAR');
 
-        $emailDeleted = Db::execute(
-            'DELETE FROM email_log
-              WHERE organization_id = ? AND created_at < DATE_SUB(NOW(), INTERVAL ? DAY)',
-            [$organizationId, (int) $settings['retention.email_log_days']],
-        );
+        $emailDeleted = self::older('DELETE', 'email_log', $organizationId, (int) $settings['retention.email_log_days'], 'DAY');
 
-        $smsDeleted = Db::execute(
-            'DELETE FROM sms_log
-              WHERE organization_id = ? AND created_at < DATE_SUB(NOW(), INTERVAL ? DAY)',
-            [$organizationId, (int) $settings['retention.email_log_days']],
-        );
+        $smsDeleted = self::older('DELETE', 'sms_log', $organizationId, (int) $settings['retention.email_log_days'], 'DAY');
 
         $summary = sprintf(
             '%d client record(s) anonymised; %d audit, %d email and %d text record(s) deleted.',

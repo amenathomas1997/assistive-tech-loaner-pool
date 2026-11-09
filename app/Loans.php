@@ -243,11 +243,21 @@ final class Loans
             $requestId = $input['requestId'] ?? null;
             if (!empty($requestId)) {
                 $linked = Db::one(
-                    'SELECT id, status, reference FROM loan_requests WHERE id = ? AND organization_id = ?',
+                    'SELECT id, status, reference, device_id FROM loan_requests WHERE id = ? AND organization_id = ?',
                     [$requestId, $organizationId],
                 );
                 if ($linked === null) {
                     throw Util::badRequest('That request does not exist.', ['field' => 'request_id']);
+                }
+
+                // Fulfilling it with a different device would leave the one
+                // that was promised marked "reserved" for nobody.
+                if ($linked['device_id'] !== null && (int) $linked['device_id'] !== (int) $locked['id']) {
+                    throw Util::conflict(
+                        "Request {$linked['reference']} is for a different device. Change the device on "
+                        . 'the request first, or check this one out without linking it.',
+                        ['field' => 'request_id', 'device_id' => (int) $linked['device_id']],
+                    );
                 }
                 if ($linked['status'] !== 'approved') {
                     throw Util::conflict(

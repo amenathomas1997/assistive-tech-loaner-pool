@@ -162,6 +162,10 @@ final class Sso
             self::finish('not_configured', $popup);
         }
 
+        // This endpoint needs no sign-in and adds a row, so old rows go here as
+        // well as in the nightly job, which may not be set up yet.
+        self::prune();
+
         $config   = self::config($organizationId);
         $state    = bin2hex(random_bytes(32));
         $nonce    = bin2hex(random_bytes(32));
@@ -271,7 +275,14 @@ final class Sso
             self::refuse($organizationId, $problem === 'guest' ? 'guest' : 'failed', "the token was refused: {$problem}", $popup);
         }
 
-        $resolved = self::resolveUser($organizationId, $claims);
+        // The person arrived by following a redirect, so a failure here has to
+        // end on a page they can read rather than a block of JSON.
+        try {
+            $resolved = self::resolveUser($organizationId, $claims);
+        } catch (\Throwable $e) {
+            error_log('[sso] could not match the account: ' . $e->getMessage());
+            self::refuse($organizationId, 'failed', 'the staff account could not be matched or created', $popup);
+        }
 
         if (isset($resolved['refused'])) {
             self::refuse($organizationId, $resolved['refused'], $resolved['why'], $popup);

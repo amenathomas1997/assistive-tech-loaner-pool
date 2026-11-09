@@ -158,17 +158,17 @@ final class Authentication
         ]);
     }
 
+    public static function ssoStatus(Request $request): never
+    {
+        Response::json(Sso::publicStatus());
+    }
+
     /**
      * Second step of a two-factor sign-in.
      *
      * The half-finished attempt lives server-side, so a browser cannot skip
      * from "password accepted" to "signed in" by editing what it holds.
      */
-    public static function ssoStatus(Request $request): never
-    {
-        Response::json(Sso::publicStatus());
-    }
-
     public static function verifySecondFactor(Request $request): never
     {
         $pendingId = Util::str($request->input('pending_id'), 128);
@@ -406,7 +406,6 @@ final class Authentication
             Response::json($generic);
         }
 
-        // Invalidate any outstanding link, so a forwarded old email is useless.
         // One message per mailbox every few minutes, however often the form is
         // submitted: nothing else stands between this unauthenticated endpoint
         // and somebody's inbox. The answer is the same either way.
@@ -420,6 +419,7 @@ final class Authentication
             Response::json($generic);
         }
 
+        // Invalidate any outstanding link, so a forwarded old email is useless.
         Db::execute('DELETE FROM password_resets WHERE user_id = ? AND used_at IS NULL', [$user['id']]);
 
         $token     = Util::randomToken(32);

@@ -113,6 +113,12 @@ final class Directory
         $first = Util::requiredStr($input['first_name'] ?? $input['firstName'] ?? null, 'first_name', 120);
         $last  = Util::requiredStr($input['last_name'] ?? $input['lastName'] ?? null, 'last_name', 120);
 
+        $counselorId = $input['counselor_id'] ?? $input['counselorId'] ?? null;
+        $programId   = $input['program_id'] ?? $input['programId'] ?? null;
+
+        Loans::assertBelongs('users', $counselorId, $organizationId, 'counselor');
+        Loans::assertBelongs('programs', $programId, $organizationId, 'program');
+
         try {
             $id = Db::insert(
                 'INSERT INTO clients
@@ -130,8 +136,8 @@ final class Directory
                     // Consent is explicit: holding a mobile number is not
                     // permission to text it.
                     Util::bool($input['sms_opt_in'] ?? $input['smsOptIn'] ?? false) ? 1 : 0,
-                    $input['counselor_id'] ?? $input['counselorId'] ?? null,
-                    $input['program_id'] ?? $input['programId'] ?? null,
+                    $counselorId ?: null,
+                    $programId ?: null,
                     Util::str($input['notes'] ?? null),
                     Util::bool($input['active'] ?? true, true) ? 1 : 0,
                 ],
@@ -677,7 +683,7 @@ final class Directory
                 ? "Account for {$after['full_name']} deactivated"
                 : "Account for {$after['full_name']} updated",
             'detail'         => Audit::diff($before, $after,
-                ['full_name', 'email', 'role', 'phone', 'employee_ref', 'badge_barcode', 'active']),
+                ['full_name', 'email', 'role', 'phone', 'employee_ref', 'badge_barcode', 'active', 'sso_linked']),
         ]);
 
         return $after;
