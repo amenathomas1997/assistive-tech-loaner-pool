@@ -179,6 +179,19 @@ final class Requests
             self::assertBelongs('users', $input['assignedTechId'] ?? null, $organizationId,
                 'technician', 'assigned_tech_id');
 
+            $status = !empty($input['autoApprove']) ? 'approved' : 'submitted';
+
+            // Approved with a device means that device is held, the same as a
+            // technician's approval. One that cannot be held right now leaves
+            // the request for a technician to review.
+            if ($status === 'approved' && $deviceId) {
+                try {
+                    self::reserveDevice($organizationId, $deviceId);
+                } catch (HttpError) {
+                    $status = 'submitted';
+                }
+            }
+
             for ($attempt = 0; $attempt < 6; $attempt++) {
                 $reference = Util::makeReference('RQ');
                 try {
@@ -197,7 +210,7 @@ final class Requests
                             $input['loanPeriodId'] ?? null, $input['requestedDays'] ?? null,
                             $input['deliveryMode'] ?? 'vrc_pickup',
                             $input['authorizationRef'] ?? null,
-                            !empty($input['autoApprove']) ? 'approved' : 'submitted',
+                            $status,
                         ],
                     );
                     return ['id' => $id, 'reference' => $reference];
@@ -262,8 +275,22 @@ final class Requests
                 );
             }
 
+            // An approved request's device is a device held for it: holdOn()
+            // and every check-out treat it so. A device the counselor named
+            // but the reviewer did not pick (the review form offers only
+            // devices on the shelf, so one out on loan shows as "decide
+            // later") used to stay attached without being held, and was
+            // lent to the next walk-in the day it came back.
+            $clearDevice = false;
+
             if ($decision === 'approved' && $deviceId) {
                 self::reserveDevice($organizationId, $deviceId);
+            } elseif ($decision === 'approved' && !empty($request['device_id'])) {
+                try {
+                    self::reserveDevice($organizationId, (int) $request['device_id']);
+                } catch (HttpError) {
+                    $clearDevice = true;
+                }
             }
 
             self::assertBelongs('users', $input['assignedTechId'] ?? null, $organizationId,
@@ -274,18 +301,18 @@ final class Requests
             Db::execute(
                 'UPDATE loan_requests
                     SET status = ?, review_notes = ?, reviewed_by = ?, reviewed_at = NOW(),
-                        device_id = COALESCE(?, device_id),
+                        device_id = IF(? = 1, NULL, COALESCE(?, device_id)),
                         assigned_tech_id = COALESCE(?, assigned_tech_id),
                         loan_period_id = COALESCE(?, loan_period_id),
                         updated_at = NOW()
                   WHERE id = ?',
                 [
-                    $decision, $notes, $actorId, $deviceId,
+                    $decision, $notes, $actorId, $clearDevice ? 1 : 0, $deviceId,
                     $input['assignedTechId'] ?? null, $input['loanPeriodId'] ?? null, $requestId,
                 ],
             );
 
-            return $request;
+            return $request + ['__dropped_device' => $clearDevice ? (int) $request['device_id'] : null];
         });
 
         Audit::record($actor, [
@@ -295,7 +322,9 @@ final class Requests
             'entityId'       => $requestId,
             'entityLabel'    => $request['reference'],
             'summary'        => "Request {$request['reference']} {$decision}" . ($notes !== null ? ": {$notes}" : ''),
-            'detail'         => ['decision' => $decision, 'device_id' => $deviceId],
+            'detail'         => ['decision' => $decision, 'device_id' => $deviceId,
+                                 // The device the counselor named, which could not be held.
+                                 'named_device_not_held' => $request['__dropped_device']],
         ]);
 
         return self::get($organizationId, $requestId);

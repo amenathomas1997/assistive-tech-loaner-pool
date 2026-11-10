@@ -89,8 +89,9 @@ final class Repairs
 
         // Warranty is the single most valuable thing to notice before paying
         // for a repair, so it is computed rather than left to be eyeballed.
+        // The expiry date is the last day of cover, so the whole of it counts.
         $row['warranty_active'] = !empty($row['warranty_expires'])
-            && strtotime((string) $row['warranty_expires']) >= $start;
+            && strtotime(substr((string) $row['warranty_expires'], 0, 10) . ' 23:59:59') >= $start;
 
         return $row;
     }
@@ -303,6 +304,15 @@ final class Repairs
                 if ($newStatus === 'with_vendor' && empty($repair['sent_at']) && !array_key_exists('sentAt', $input)) {
                     $sets[] = 'sent_at = NOW()';
                 }
+                // And coming back from the vendor is the other half of the
+                // same date pair. Nothing on screen asks for it, so without
+                // this the vendor turnaround report had no repair to measure
+                // and showed every vendor at 0 days.
+                if ($repair['status'] === 'with_vendor' && empty($repair['returned_at'])
+                    && !array_key_exists('returnedAt', $input)
+                ) {
+                    $sets[] = 'returned_at = NOW()';
+                }
             }
 
             if ($sets !== []) {
@@ -475,13 +485,14 @@ final class Repairs
         $where  = ['r.organization_id = ?'];
         $params = [$organizationId];
 
-        if ($from !== null) {
+        if ($from !== null && $from !== '') {
             $where[]  = 'r.created_at >= ?';
             $params[] = Util::mysqlDateTime($from);
         }
-        if ($to !== null) {
+        if ($to !== null && $to !== '') {
+            // A date on its own means the whole of that day, as everywhere else.
             $where[]  = 'r.created_at <= ?';
-            $params[] = Util::mysqlDateTime($to);
+            $params[] = Util::endOfRange($to);
         }
         $whereSql = implode(' AND ', $where);
 

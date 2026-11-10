@@ -430,7 +430,8 @@ final class Agreements
         return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
             . '<meta name="viewport" content="width=device-width, initial-scale=1">'
             . '<title>' . Util::escapeHtml($pageTitle) . '</title><style>'
-            . '@page{size:A4;margin:18mm}'
+            // No paper size: whatever the printer holds, US Letter or A4.
+            . '@page{margin:18mm}'
             . 'body{font:12pt/1.6 Georgia,"Times New Roman",serif;color:#111;max-width:170mm;margin:0 auto;padding:12mm}'
             . 'h1{font-size:17pt;margin:0 0 4mm}'
             . '.org{font-size:11pt;color:#444;margin:0 0 8mm}'

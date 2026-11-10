@@ -148,7 +148,7 @@ final class Hygiene
     public static function report(int $organizationId, ?string $from = null, ?string $to = null): array
     {
         $fromSql = Util::mysqlDateTime($from ?: '-90 days');
-        $toSql   = Util::mysqlDateTime($to ?: 'now');
+        $toSql   = $to ? Util::endOfRange($to) : Util::mysqlDateTime('now');
 
         $totals = Db::one(
             'SELECT COUNT(*) AS cleanings, COUNT(DISTINCT device_id) AS devices_cleaned

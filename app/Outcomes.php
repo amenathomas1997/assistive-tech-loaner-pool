@@ -226,7 +226,7 @@ final class Outcomes
     public static function report(int $organizationId, ?string $from = null, ?string $to = null): array
     {
         $fromSql = Util::mysqlDateTime($from ?: '-1 year');
-        $toSql   = Util::mysqlDateTime($to ?: 'now');
+        $toSql   = $to ? Util::endOfRange($to) : Util::mysqlDateTime('now');
 
         $where  = 'l.organization_id = ? AND l.status = "returned"
                    AND l.returned_at >= ? AND l.returned_at <= ?';

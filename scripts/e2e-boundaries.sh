@@ -361,7 +361,7 @@ api "$ADMIN" POST "/requests/$JUMPER/approve" '{}' > /dev/null
 CHECKIN_BODY="{\"loan_id\":$LOAN}"
 api "$ADMIN" POST /loans/checkin "$CHECKIN_BODY" > /dev/null
 eq 'the returned device is held for the waitlist'           "$(status_of "$WAITED")" reserved
-FULFIL_BODY='{"custom_days":7}'
+FULFIL_BODY="{\"custom_days\":7,\"device\":$WAITED}"
 eq 'a request cannot be fulfilled over a waitlist hold'     "$(code "$ADMIN" POST "/requests/$JUMPER/fulfil" "$FULFIL_BODY")" 409
 eq 'and the device is still held'                           "$(status_of "$WAITED")" reserved
 
@@ -541,7 +541,7 @@ OVERDUE_IDS=$(api "$ADMIN" GET /loans/overdue | python3 -c 'import sys,json; pri
 case " $OVERDUE_IDS " in *" $DUE_LOAN "*) pass 'a loan chased yesterday is still overdue today';; *) fail 'a loan chased yesterday is still overdue today';; esac
 
 # The end of a date filter includes that day.
-TODAY=$(php -r 'echo date("Y-m-d");')
+TODAY=$(php -r '$c = json_decode(file_get_contents("data/config.json"), true); date_default_timezone_set($c["timezone"] ?? "UTC"); echo date("Y-m-d");')
 eq 'the audit log filtered to today finds today'            "$([ "$(api "$ADMIN" GET "/audit?from=$TODAY&to=$TODAY&per_page=1" | jqv meta.total)" -gt 0 ] && echo yes)" yes
 
 # Lending over a request's hold does not lose the request.
@@ -627,6 +627,92 @@ POST|/auth/login/verify|{"pending_id":"x","code":[1]}
 POST|/auth/change-password|{"current_password":[1],"new_password":"x"}
 POST|/auth/reset-password|{"token":"x","new_password":[1]}
 MALFORMED
+
+echo "==> Seventh audit: reports, disposals, repairs, requests and reminders"
+
+RANGE="from=2020-01-01&to=$TODAY"
+atleast() { if [ "${2:-0}" -ge "$3" ] 2>/dev/null; then pass "$1"; else fail "$1" "expected at least $3, got ${2:-nothing}"; fi; }
+
+# A report's last day is the whole of that day, as in every list.
+S7_DEV=$(device)
+S7_REPAIR_BODY="{\"device\":$S7_DEV,\"fault\":\"$TAG seventh audit\",\"vendor\":\"$TAG vendor\"}"
+S7_REPAIR=$(api "$ADMIN" POST /repairs "$S7_REPAIR_BODY" | jqv repair.id)
+atleast 'the repair summary counts a repair opened today'  "$(api "$ADMIN" GET "/repairs/summary?$RANGE" | jqv totals.repair_count)" 1
+S7_CLIENT=$(new_client Seventh Report); S7_LEND_DEV=$(device)
+S7_LOAN=$(lend "$S7_LEND_DEV" "$S7_CLIENT" 3)
+S7_IN="{\"loan_id\":$S7_LOAN}"
+api "$ADMIN" POST /loans/checkin "$S7_IN" > /dev/null
+api "$ADMIN" POST "/loans/$S7_LOAN/outcome" '{"outcome":"recommended"}' > /dev/null
+atleast 'the outcomes report counts a trial ended today'    "$(api "$ADMIN" GET "/reports/outcomes?$RANGE" | jqv totals.completed)" 1
+atleast 'the cleaning report counts a return today'         "$(api "$ADMIN" GET "/reports/hygiene?$RANGE" | jqv totals.returns)" 1
+
+# A disposal date has to be a date.
+S7_GONE=$(device)
+eq 'an impossible disposal date is refused'                "$(code "$ADMIN" POST "/devices/$S7_GONE/dispose" '{"method":"recycled","disposed_at":"2026-02-31"}')" 400
+eq 'and an unreadable one'                                 "$(code "$ADMIN" POST "/devices/$S7_GONE/dispose" '{"method":"recycled","disposed_at":"31/02/2026"}')" 400
+eq 'and one in the future'                                 "$(code "$ADMIN" POST "/devices/$S7_GONE/dispose" '{"method":"recycled","disposed_at":"2099-01-01"}')" 400
+eq 'and a list'                                            "$(code "$ADMIN" POST "/devices/$S7_GONE/dispose" '{"method":"recycled","disposed_at":[1]}')" 400
+eq 'and nothing was disposed of by trying'                 "$(status_of "$S7_GONE")" available
+api "$ADMIN" POST "/devices/$S7_GONE/dispose" '{"method":"recycled"}' > /dev/null
+eq 'a disposal with no date is dated today'                "$(api "$ADMIN" GET "/devices/$S7_GONE" | jqv device.disposed_at | cut -c1-10)" "$TODAY"
+eq 'and cannot be recorded twice'                          "$(code "$ADMIN" POST "/devices/$S7_GONE/dispose" '{"method":"recycled"}')" 409
+atleast 'and is on the disposal report for today'          "$(api "$ADMIN" GET "/reports/disposals?$RANGE" | jqv total)" 1
+
+# Repairs: what the spend and turnaround reports are built from.
+eq 'a negative repair cost is refused'                     "$(code "$ADMIN" PATCH "/repairs/$S7_REPAIR" '{"cost":-50}')" 400
+eq 'and a negative purchase cost'                          "$(code "$ADMIN" PATCH "/devices/$S7_DEV" '{"purchase_cost":-5}')" 400
+api "$ADMIN" PATCH "/repairs/$S7_REPAIR" '{"status":"with_vendor"}' > /dev/null
+S7_CLOSE='{"status":"repaired","cost":80,"under_warranty":true}'
+S7_CLOSED=$(api "$ADMIN" PATCH "/repairs/$S7_REPAIR" "$S7_CLOSE")
+if [ -n "$(printf '%s' "$S7_CLOSED" | jqv repair.returned_at)" ]; then pass 'coming back from the vendor records the return date'
+else fail 'coming back from the vendor records the return date'; fi
+eq 'and a repair can be marked as covered by warranty'     "$(printf '%s' "$S7_CLOSED" | jqv repair.under_warranty)" 1
+atleast 'which the spend report counts as covered'         "$(api "$ADMIN" GET "/repairs/summary?$RANGE" | jqv totals.warranty_cost | cut -d. -f1)" 80
+
+# The signed agreement prints on whatever paper the printer holds.
+case "$(curl -s -b "$ADMIN" "$BASE/api/v1/agreements/$S7_LOAN/print")" in
+  *'size:A4'*) fail 'the agreement does not force A4 paper';;
+  *'@page{margin:18mm}'*) pass 'the agreement does not force A4 paper';;
+  *) fail 'the agreement does not force A4 paper' 'print view not found';; esac
+
+# An approved request's device is a held device, or no device at all.
+S7_OUT=$(device); S7_OTHER=$(new_client Walk In)
+S7_OUT_LOAN=$(lend "$S7_OUT" "$S7_OTHER" 3)
+S7_ASK_OUT="{\"client_id\":$MY_CLIENT,\"device_id\":$S7_OUT,\"justification\":\"$TAG wants that one\"}"
+S7_RQ=$(api "$VRC" POST /requests "$S7_ASK_OUT" | jqv request.id)
+api "$ADMIN" POST "/requests/$S7_RQ/approve" '{"device_id":null}' > /dev/null
+eq 'approving with no device leaves none attached when the named one is out' "$(api "$ADMIN" GET "/requests/$S7_RQ" | jqv request.device_id)" ''
+S7_SHELF=$(device)
+S7_ASK_SHELF="{\"client_id\":$MY_CLIENT,\"device_id\":$S7_SHELF,\"justification\":\"$TAG wants this one\"}"
+S7_RQ2=$(api "$VRC" POST /requests "$S7_ASK_SHELF" | jqv request.id)
+api "$ADMIN" POST "/requests/$S7_RQ2/approve" '{"device_id":null}' > /dev/null
+eq 'and holds the named device when it is on the shelf'    "$(status_of "$S7_SHELF")" reserved
+S7_WALKIN="{\"device\":$S7_SHELF,\"client_id\":$S7_OTHER,\"custom_days\":3}"
+eq 'so a walk-in cannot take it'                           "$(api "$ADMIN" POST /loans/checkout "$S7_WALKIN" | jqv error.code)" device_held
+AUTO_ON='{"settings":{"loans.auto_approve_vrc":true}}'
+api "$ADMIN" PATCH /admin/settings "$AUTO_ON" > /dev/null
+S7_RQ3=$(api "$VRC" POST /requests "$S7_ASK_OUT" | jqv request.id)
+eq 'an automatic approval waits for review when the device is out' "$(api "$ADMIN" GET "/requests/$S7_RQ3" | jqv request.status)" submitted
+S7_SHELF2=$(device)
+S7_ASK_SHELF2="{\"client_id\":$MY_CLIENT,\"device_id\":$S7_SHELF2,\"justification\":\"$TAG wants this one\"}"
+S7_RQ4=$(api "$VRC" POST /requests "$S7_ASK_SHELF2" | jqv request.id)
+eq 'and holds the device when it is free'                  "$(api "$ADMIN" GET "/requests/$S7_RQ4" | jqv request.status)/$(status_of "$S7_SHELF2")" approved/reserved
+AUTO_OFF='{"settings":{"loans.auto_approve_vrc":false}}'
+api "$ADMIN" PATCH /admin/settings "$AUTO_OFF" > /dev/null
+
+# Missing outcomes are chased once per loan, whenever the job next runs.
+CHASE_SETTINGS='{"settings":{"outcomes.enabled":true,"outcomes.chase_after_days":7}}'
+api "$ADMIN" PATCH /admin/settings "$CHASE_SETTINGS" > /dev/null
+S7_CHASE_DEV=$(device); S7_CHASE_CLIENT=$(new_client Chase Me)
+S7_CHASE=$(lend "$S7_CHASE_DEV" "$S7_CHASE_CLIENT" 3)
+S7_CHASE_IN="{\"loan_id\":$S7_CHASE}"
+api "$ADMIN" POST /loans/checkin "$S7_CHASE_IN" > /dev/null
+sql "UPDATE loans SET returned_at = DATE_SUB(NOW(), INTERVAL 10 DAY) WHERE id = $S7_CHASE"
+chased() { api "$ADMIN" POST /jobs/run '{}' | python3 -c 'import sys,json; o=json.load(sys.stdin)["organizations"]; print(sum(v["jobs"]["outcome_chase"]["detail"]["outstanding"] for v in o.values()))'; }
+CHASED_BEFORE=$(chased)
+atleast 'a trial a missed cron run skipped is still chased' "$CHASED_BEFORE" 1
+sql "INSERT INTO loan_events (loan_id, event_type, notes) VALUES ($S7_CHASE, 'note', 'Administrators reminded to record the trial outcome.')"
+eq 'and a trial already chased is not chased again'        "$(chased)" "$((CHASED_BEFORE - 1))"
 
 rm -f "$ADMIN" "$VRC" "$TECH"
 

@@ -670,7 +670,7 @@ export async function renderRepairDetail({ params }) {
     ]),
 
     repair.under_warranty
-      ? alertBox('This device was under warranty when the fault was reported.', { type: 'info', title: 'Warranty' })
+      ? alertBox('This repair is covered by warranty, so its cost is reported as covered rather than paid.', { type: 'info', title: 'Warranty' })
       : null,
 
     el('div', { class: 'grid grid-2' }, [
@@ -809,6 +809,24 @@ async function openRepairUpdateDialog(repair, meta, onDone) {
   });
   const notesField = field({ name: 'notes', label: 'Note for the history', type: 'textarea' });
 
+  // The repair spend report splits cost into covered and paid by this flag,
+  // and until this box existed nothing on screen could set it.
+  const warrantyBox = el('input', {
+    type: 'checkbox', id: `repair-warranty-${repair.id}`, checked: Boolean(Number(repair.under_warranty || 0)),
+  });
+  const warrantyField = el('label', { class: 'checkbox', for: `repair-warranty-${repair.id}` }, [
+    warrantyBox,
+    el('span', {}, [
+      'Covered by warranty',
+      el('span', {
+        class: 'option-help',
+        text: repair.warranty_active
+          ? `The device was under warranty when this was reported${repair.warranty_expires ? ` (cover runs to ${formatDate(repair.warranty_expires)})` : ''}.`
+          : 'Tick it if the manufacturer or vendor is paying for this repair.',
+      }),
+    ]),
+  ]);
+
   const closeWarning = el('div');
   statusField.control.addEventListener('change', (e) => {
     clear(closeWarning);
@@ -832,6 +850,7 @@ async function openRepairUpdateDialog(repair, meta, onDone) {
       resolutionField,
       el('div', { class: 'form-grid' }, [vendorField, vendorRefField]),
       costField,
+      warrantyField,
       notesField,
     ]),
     actions: [
@@ -848,6 +867,7 @@ async function openRepairUpdateDialog(repair, meta, onDone) {
               vendor: vendorField.control.value || null,
               vendor_ref: vendorRefField.control.value || null,
               cost: costField.control.value === '' ? null : Number(costField.control.value),
+              under_warranty: warrantyBox.checked,
               notes: notesField.control.value || null,
             });
             toastOk('Repair updated.');

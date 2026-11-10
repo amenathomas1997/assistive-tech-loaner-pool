@@ -644,6 +644,22 @@ final class Devices
         // refused rather than quietly recorded.
         $notes = Util::str($input['notes'] ?? null);
 
+        // Refused rather than stored as nothing. A disposal with no date drops
+        // out of the disposal report, which is selected by date, and looks as
+        // if it never happened, so the same device could be disposed of twice.
+        $rawDate = $input['disposedAt'] ?? null;
+        if ($rawDate !== null && !is_scalar($rawDate)) {
+            throw Util::badRequest('"disposed_at" must be a date.', ['field' => 'disposed_at']);
+        }
+        if (is_string($rawDate) && preg_match('/^\d{4}-\d{2}-\d{2}$/', trim($rawDate))) {
+            Util::dateOnly(trim($rawDate), 'disposed_at'); // 31 February is refused, not rolled into March
+        }
+        $disposedAt = Util::dateTime($rawDate, 'disposed_at') ?? new \DateTimeImmutable();
+
+        if ($disposedAt > new \DateTimeImmutable('tomorrow')) {
+            throw Util::badRequest('A disposal date cannot be in the future.', ['field' => 'disposed_at']);
+        }
+
         if ($method === 'lost' && ($notes === null || mb_strlen($notes) < 3)) {
             throw Util::badRequest(
                 'Say what happened. A device recorded as lost with no explanation is the first thing '
@@ -659,7 +675,7 @@ final class Devices
               WHERE id = ? AND organization_id = ?',
             [
                 $method === 'lost' ? 'lost' : 'retired',
-                Util::mysqlDateTime($input['disposedAt'] ?? 'now'),
+                Util::mysqlDateTime($disposedAt),
                 $method,
                 Util::boundedStr($input['reference'] ?? null, 'reference', 120),
                 $notes,
@@ -702,7 +718,7 @@ final class Devices
     public static function disposalReport(int $organizationId, ?string $from = null, ?string $to = null): array
     {
         $fromSql = Util::mysqlDateTime($from ?: '-1 year');
-        $toSql   = Util::mysqlDateTime($to ?: 'now');
+        $toSql   = $to ? Util::endOfRange($to) : Util::mysqlDateTime('now');
 
         $rows = Db::all(
             'SELECT d.id, d.name, d.barcode, d.asset_tag, d.serial_number, d.category,

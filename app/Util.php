@@ -147,6 +147,11 @@ final class Util
         if (!is_numeric($value)) {
             throw self::badRequest("\"{$field}\" must be a number.", ['field' => $field]);
         }
+        // Every caller is an amount of money paid. A negative one is a typo,
+        // and it quietly subtracts from the spend reports it feeds.
+        if ((float) $value < 0) {
+            throw self::badRequest("\"{$field}\" cannot be negative.", ['field' => $field]);
+        }
         return (float) $value;
     }
 

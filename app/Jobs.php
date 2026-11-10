@@ -17,6 +17,11 @@ namespace Loaner;
 
 final class Jobs
 {
+    /** Written on a loan once the administrators have been asked for its outcome. */
+    private const OUTCOME_CHASED_NOTE = 'Administrators reminded to record the trial outcome.';
+
+    private const OUTCOME_CATCH_UP_DAYS = 30;
+
     public const NAMES = [
         'due_soon', 'overdue', 'reservation_expiry', 'outcome_chase',
         'session_prune', 'scan_prune', 'retention_purge',
@@ -234,6 +239,11 @@ final class Jobs
      * Not a client-facing message: this goes to the administrators, because an
      * outcome is staff work. Sent once rather than daily — a nag that arrives
      * every morning gets filtered, and then nobody sees the one that mattered.
+     *
+     * "Once" is recorded on the loan, not inferred from the clock. Selecting
+     * the loans that crossed the line in the last 24 hours sent the same list
+     * again whenever the job ran twice in a day ("Run now" after the morning
+     * cron), and skipped a day's returns for good whenever cron missed one.
      */
     private static function chaseOutcomes(?array $actor, int $organizationId): array
     {
@@ -243,8 +253,11 @@ final class Jobs
 
         $after = max(1, (int) Settings::get($organizationId, 'outcomes.chase_after_days'));
 
+        // A month of catching up after a run that never happened, and no
+        // further: trials from last year are for the outstanding list, not
+        // for an email that arrives out of nowhere.
         $rows = Db::all(
-            'SELECT l.reference, d.name AS device_name,
+            'SELECT l.id, l.reference, d.name AS device_name,
                     CONCAT(c.first_name, " ", c.last_name) AS client_name, l.returned_at
                FROM loans l
                JOIN devices d ON d.id = l.device_id
@@ -252,13 +265,15 @@ final class Jobs
               WHERE l.organization_id = ? AND l.status = "returned" AND l.outcome IS NULL
                 AND l.returned_at < DATE_SUB(NOW(), INTERVAL ? DAY)
                 AND l.returned_at > DATE_SUB(NOW(), INTERVAL ? DAY)
+                AND NOT EXISTS (SELECT 1 FROM loan_events e
+                                 WHERE e.loan_id = l.id AND e.event_type = "note" AND e.notes = ?)
               ORDER BY l.returned_at
               LIMIT 50',
-            [$organizationId, $after, $after + 1],
+            [$organizationId, $after, $after + self::OUTCOME_CATCH_UP_DAYS, self::OUTCOME_CHASED_NOTE],
         );
 
         if ($rows === []) {
-            return ['summary' => 'No trials became overdue for an outcome today.', 'outstanding' => 0];
+            return ['summary' => 'No trials are waiting to be chased for an outcome.', 'outstanding' => 0];
         }
 
         $recipients = Settings::parseRecipients(
@@ -284,12 +299,21 @@ final class Jobs
             'subject'   => count($rows) . ' trial(s) need an outcome recorded',
             'html'      => Mailer::layout(
                 'Trials waiting for an outcome',
-                '<p>These devices came back ' . $after . ' day(s) ago and no trial outcome has been '
+                '<p>These devices came back at least ' . $after . ' day(s) ago and no trial outcome has been '
                 . 'recorded. Without one they are missing from the purchasing reports.</p><ul>'
                 . $list . '</ul>',
             ),
             'eventType' => 'outcome_chase',
         ]);
+
+        if ($result['sent']) {
+            foreach ($rows as $row) {
+                Db::execute(
+                    'INSERT INTO loan_events (loan_id, event_type, notes) VALUES (?, "note", ?)',
+                    [$row['id'], self::OUTCOME_CHASED_NOTE],
+                );
+            }
+        }
 
         return [
             'summary' => sprintf(
